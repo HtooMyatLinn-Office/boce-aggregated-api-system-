@@ -1,0 +1,88 @@
+import { Queue, Worker, Job } from 'bullmq';
+import { config } from '../../config';
+import { parseRedisUrl } from './util';
+import { DetectionResult } from '../../types';
+import { detectOnce } from '../detection/detect';
+import { saveDetection } from '../db/detectionsRepo';
+import {
+  markDomainCompleted,
+  markDomainFailed,
+  markDomainRunning,
+} from '../db/scanJobsRepo';
+
+export const BATCH_DOMAIN_QUEUE_NAME = 'batch-domain';
+
+export interface BatchDomainJobData {
+  jobId: string;
+  domain: string;
+  nodeIds: string;
+  ipWhitelist?: string[];
+}
+
+export interface BatchDomainJobResult {
+  ok: boolean;
+  requestId?: string;
+}
+
+const bullConnection = parseRedisUrl(config.redis?.url ?? 'redis://localhost:6379');
+
+export const batchDomainQueue = new Queue<BatchDomainJobData, BatchDomainJobResult, string>(
+  BATCH_DOMAIN_QUEUE_NAME,
+  {
+    connection: bullConnection,
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 2000 },
+      removeOnComplete: { age: 24 * 60 * 60, count: 10000 },
+      removeOnFail: { age: 24 * 60 * 60, count: 10000 },
+    },
+  }
+);
+
+let worker: Worker<BatchDomainJobData, BatchDomainJobResult, string> | undefined;
+
+export function startBatchDomainWorker(): void {
+  if (!config.queue.enabled) return;
+  if (worker) return;
+
+  worker = new Worker<BatchDomainJobData, BatchDomainJobResult, string>(
+    BATCH_DOMAIN_QUEUE_NAME,
+    async (job: Job<BatchDomainJobData, BatchDomainJobResult>) => {
+      const { jobId, domain, nodeIds, ipWhitelist } = job.data;
+
+      const claimed = await markDomainRunning({ jobId, domain });
+      if (!claimed) return { ok: true };
+
+      // detectOnce already performs points-safe and returns normalized/metrics/anomalies
+      const result: DetectionResult = await detectOnce({ url: domain, nodeIds, ipWhitelist });
+
+      await saveDetection(result);
+
+      await markDomainCompleted({
+        jobId,
+        domain,
+        requestId: result.requestId,
+        taskId: result.taskId,
+      });
+
+      return { ok: true, requestId: result.requestId };
+    },
+    {
+      connection: bullConnection,
+      concurrency: Math.max(1, config.queue.concurrency),
+    }
+  );
+
+  worker.on('failed', async (job, err) => {
+    const data = job?.data;
+    if (!data) return;
+    const lastError = err?.message ?? 'unknown error';
+    await markDomainFailed({ jobId: data.jobId, domain: data.domain, lastError });
+  });
+}
+
+export async function enqueueBatchDomain(data: BatchDomainJobData) {
+  const job = await batchDomainQueue.add('batchDomain', data);
+  return job;
+}
+

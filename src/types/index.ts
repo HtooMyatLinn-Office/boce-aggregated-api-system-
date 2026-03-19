@@ -61,3 +61,57 @@ export interface DetectionResult {
   anomalies: Anomaly[];
   summary: { overallStatus: 'HEALTHY' | 'DEGRADED' | 'UNAVAILABLE'; message: string };
 }
+
+export interface DetectionHistoryItem {
+  requestId: string;
+  taskId: string;
+  url: string;
+  createdAt: string;
+  overallStatus?: DetectionResult['summary']['overallStatus'];
+  availabilityRate?: number;
+}
+
+// --- Batch detection (Steps 11 / supervisor requirements) ---
+
+export type ScanJobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type ScanDomainItemStatus = 'PENDING' | 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+
+export interface BatchDetectRequest {
+  domains: string[];
+  nodeIds: string; // e.g. "31,32"
+  ipWhitelist?: string[];
+  // reserved for idempotency; optional for now
+  idempotencyKey?: string;
+  // reserved for future options
+  provider?: string;
+}
+
+export interface BatchDetectJobResponse {
+  jobId: string;
+  estimatedPoints: number;
+  totalItems: number;
+  statusUrl: string;
+}
+
+export interface BatchDetectJobStatusResponse {
+  jobId: string;
+  status: ScanJobStatus;
+  totalItems: number;
+  finishedItems: number;
+  successItems: number;
+  failedItems: number;
+  estimatedPoints: number;
+  lastError?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BatchDetectJobItem {
+  id: string;
+  domain: string;
+  status: ScanDomainItemStatus;
+  requestId?: string | null;
+  taskId?: string | null;
+  attempts: number;
+  lastError?: string | null;
+}

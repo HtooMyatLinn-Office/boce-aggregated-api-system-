@@ -3,6 +3,7 @@ import { config } from './config';
 import { startNodeCacheAutoRefresh } from './services/boce';
 import { startDetectWorker } from './services/queue/detectQueue';
 import { migrate } from './services/db/migrate';
+import { startBatchDomainWorker } from './services/queue/batchQueue';
 
 const server = app.listen(config.port, () => {
   console.log(`Boce API listening on port ${config.port} (${config.nodeEnv})`);
@@ -15,5 +16,6 @@ migrate()
 
 startNodeCacheAutoRefresh();
 startDetectWorker();
+startBatchDomainWorker();
 
 export default server;

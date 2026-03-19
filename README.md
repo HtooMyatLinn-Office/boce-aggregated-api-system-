@@ -100,7 +100,9 @@ Copy `.env.example` to `.env` and edit.
 
 ## API Documentation
 
-Base URL examples below assume `http://localhost:3000`.
+**Complete API doc (all endpoints, full request/response, in test order):** [docs/API.md](docs/API.md)
+
+Summary below. Base URL: `http://localhost:3000`.
 
 ### Health
 
@@ -263,6 +265,52 @@ List stored results for a URL, newest first.
 curl "http://localhost:3000/api/detect/history?url=www.baidu.com&limit=20"
 ```
 
+**Optimization note**
+
+This endpoint returns a **lightweight history list** (IDs + a few fields) and does **not** return full `result_json`.
+Fetch the full payload by calling `GET /api/detect/results/:requestId`.
+
+**Query parameters**
+
+- `url` (**required**): host/url string exactly as stored (what you send in `POST /api/detect`).
+- `limit` (**optional**): `1..200`, default `20`.
+- `cursor` (**optional**): pagination cursor in the form `createdAt|requestId` (use `nextCursor` from previous response).
+
+**Response**
+
+```json
+{
+  "success": true,
+  "url": "www.baidu.com",
+  "count": 2,
+  "items": [
+    {
+      "requestId": "5f4d8d4b-6c44-4a5d-9b0a-9e1a6d2c5c2b",
+      "taskId": "20260318_xxx",
+      "url": "www.baidu.com",
+      "createdAt": "2026-03-18T07:16:00.677Z",
+      "overallStatus": "HEALTHY",
+      "availabilityRate": 1
+    },
+    {
+      "requestId": "a1b2c3d4-1111-2222-3333-444455556666",
+      "taskId": "20260317_yyy",
+      "url": "www.baidu.com",
+      "createdAt": "2026-03-17T02:10:11.000Z",
+      "overallStatus": "DEGRADED",
+      "availabilityRate": 0.875
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+**Pagination example**
+
+```bash
+curl "http://localhost:3000/api/detect/history?url=www.baidu.com&limit=20&cursor=2026-03-17T02:10:11.000Z|a1b2c3d4-1111-2222-3333-444455556666"
+```
+
 ---
 
 ## Node list APIs (dev, Step 5)
@@ -314,15 +362,6 @@ When rate limited, API returns **HTTP 429**:
 ```json
 { "success": false, "error": "Rate limit exceeded" }
 ```
-
-## License
-
-MIT
-
-## API (planned)
-
-- `GET /health` — OK (implemented)
-- `POST /api/detect` — body: `{ "url": "https://example.com", "ipWhitelist": [] }` (coming)
 
 ## License
 

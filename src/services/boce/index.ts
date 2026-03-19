@@ -29,6 +29,7 @@ import {
   refreshNodeCache,
   startNodeCacheAutoRefresh,
 } from './nodes';
+import { getBalance, BoceBalanceResponse } from './balance';
 
 export {
   createTask,
@@ -42,6 +43,7 @@ export {
   nodeCache,
   refreshNodeCache,
   startNodeCacheAutoRefresh,
+  getBalance,
 };
 export type {
   CreateTaskParams,
@@ -57,6 +59,7 @@ export type {
   BoceNodeListResponse,
   NodeMeta,
   NodeCacheSnapshot,
+  BoceBalanceResponse,
 };
 
 /**
@@ -106,6 +109,14 @@ export async function pollResultUntilDoneWithConfig(
     pollTimeoutMs: config.detection.pollTimeoutMs,
     ...options,
   });
+}
+
+export async function getBalanceWithConfig(): Promise<BoceBalanceResponse> {
+  const key = config.boce.apiKey;
+  if (!key) {
+    throw new BoceApiError('BOCE_API_KEY is not set', -1);
+  }
+  return getBalance(config.boce.baseUrl, key);
 }
 
 // Re-export workflow types (for external callers)

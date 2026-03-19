@@ -4,6 +4,7 @@ import 'express-async-errors';
 import { healthRouter } from './routes/health';
 import { mountDevRoutes } from './routes/dev';
 import { detectRouter } from './routes/detect';
+import { batchDetectRouter } from './routes/batch-detect';
 import { rateLimit } from './middleware/rateLimit';
 
 const app = express();
@@ -14,6 +15,7 @@ app.use(express.json());
 app.use('/health', healthRouter);
 mountDevRoutes(app);
 app.use('/api/detect', rateLimit, detectRouter);
+app.use('/api/batch-detect', rateLimit, batchDetectRouter);
 
 // Placeholder for future unified detect API
 app.get('/', (_req, res) => {

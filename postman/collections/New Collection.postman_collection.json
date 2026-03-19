@@ -1,8 +1,580 @@
 {
   "info": {
     "_postman_id": "a70b0a3c-eb4c-4575-a71c-268fc06c5b02",
-    "name": "New Collection",
+    "name": "Boce Aggregated APIs",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
-  "item": []
+  "item": [
+    {
+      "name": "Storage (Postgres)",
+      "item": [
+        {
+          "name": "Fetch Store Result",
+          "id": "ef30657b-892e-4fac-b5cc-b32c735732cb",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/detect/results/2",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "detect",
+                "results",
+                "2"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Store Result",
+          "id": "5745b433-7de9-4806-9cab-9e282511bd8e",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/detect/history?url=www.baidu.com&limit=20",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "detect",
+                "history"
+              ],
+              "query": [
+                {
+                  "key": "url",
+                  "value": "www.baidu.com",
+                  "uuid": "4ed25c1f-8c7b-48d9-8e84-a0f05e05ad6d"
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "uuid": "eb64f825-6c43-4b80-86dc-55f4a5b00252"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "id": "9186c92c-c78c-4e35-bf3c-26a3d8310231"
+    },
+    {
+      "name": "Dev Only",
+      "item": [
+        {
+          "name": "Check Env",
+          "id": "12864954-b46d-4c47-a7a3-483b3f9f2015",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/dev/check-env",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "dev",
+                "check-env"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "CreateTask",
+          "id": "e2a41d6a-f7eb-4743-8ed3-e9100ec6383a",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/dev/create-task?host=www.baidu.com&node_ids=31,32",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "dev",
+                "create-task"
+              ],
+              "query": [
+                {
+                  "key": "host",
+                  "value": "www.baidu.com",
+                  "uuid": "13bab7d4-6b65-4883-9022-1bfaaefb7b91"
+                },
+                {
+                  "key": "node_ids",
+                  "value": "31,32",
+                  "uuid": "136012d6-a40d-4d45-8682-ff6f7b79813e"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Task ID",
+          "id": "f2269426-8b9a-4573-ad77-35d15e351cf6",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/dev/get-result?taskId=20260318_425bff8587ab60ff78faa7edb9dc802a",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "dev",
+                "get-result"
+              ],
+              "query": [
+                {
+                  "key": "taskId",
+                  "value": "20260318_425bff8587ab60ff78faa7edb9dc802a",
+                  "uuid": "db23a027-0877-4ff2-9541-4244c7281c93"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Poll ID",
+          "id": "9f963f59-e354-4eaf-bc14-917eec6e9465",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/dev/poll-result?taskId=20260318_425bff8587ab60ff78faa7edb9dc802a",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "dev",
+                "poll-result"
+              ],
+              "query": [
+                {
+                  "key": "taskId",
+                  "value": "20260318_425bff8587ab60ff78faa7edb9dc802a",
+                  "uuid": "5d33dc40-a396-47b1-a7ae-39243eb0da48"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Run Detection",
+          "id": "d3ca8aba-113c-4bbe-920d-c476b6b1f1cd",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/dev/run-detection?host=www.baidu.com&node_ids=31,32",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "dev",
+                "run-detection"
+              ],
+              "query": [
+                {
+                  "key": "host",
+                  "value": "www.baidu.com",
+                  "uuid": "3c086fe5-0fd9-496c-9761-d9034f47877b"
+                },
+                {
+                  "key": "node_ids",
+                  "value": "31,32",
+                  "uuid": "231e6322-c4c8-4bb0-8333-6f48c52d050d"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "id": "9235bbfc-0e30-4c19-86b7-9dc122ce92c3"
+    },
+    {
+      "name": "Node Cache ( Dev Only)",
+      "item": [
+        {
+          "name": "Nodes",
+          "id": "97b685ca-161a-4aeb-866b-9b0337cb9cee",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/dev/nodes",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "dev",
+                "nodes"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh",
+          "id": "df670443-fd43-453f-bd29-6de4bd47c6b3",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/dev/nodes/refresh",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "dev",
+                "nodes",
+                "refresh"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Look up Node",
+          "id": "8227c591-2dd9-4ea5-bdfc-c51bb1aa3a60",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:3000/api/dev/nodes/lookup?nodeId=31",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "3000",
+              "path": [
+                "api",
+                "dev",
+                "nodes",
+                "lookup"
+              ],
+              "query": [
+                {
+                  "key": "nodeId",
+                  "value": "31",
+                  "uuid": "9e96f4be-9338-4364-8756-af49b35ed9e5"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "id": "5242ac89-1331-4017-8c32-c101353e3507"
+    },
+    {
+      "name": "Health",
+      "id": "29867323-43c3-4e22-bab9-00e0a0d446a0",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/health",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "health"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Detect (Async Enque)",
+      "id": "8273c9dc-778f-43a8-b6a3-890cbaf3b5e2",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"url\": \"www.baidu.com\",\r\n    \"nodeIds\": \"31,32\",\r\n    \"ipWhitelist\": [\r\n        \"157.148.69.186\"\r\n    ]\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/detect?async=1",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "detect"
+          ],
+          "query": [
+            {
+              "key": "async",
+              "value": "1",
+              "uuid": "f0e6f2f6-6814-4859-9c2d-b46b8fb481e2"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Detect (Sync)",
+      "id": "7c7b5e2c-6e2f-4f8c-9265-d8aa413e4f17",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n    \"url\": \"www.baidu.com\",\r\n    \"nodeIds\": \"31,32\",\r\n    \"ipWhitelist\": [\r\n        \"157.148.69.186\"\r\n    ]\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/detect",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "detect"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Job Id",
+      "id": "af9a1eba-1e63-44ea-ac73-badcbba49789",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/api/detect/jobs/1",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "detect",
+            "jobs",
+            "1"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Pre-Check(fee)",
+      "id": "50e5272e-c766-487c-a3bb-c951842dbbe2",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/api/batch-detect",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "batch-detect"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Batch submit (100 / 5000 domains handling)",
+      "id": "78bde505-8105-49a0-9005-6fcdab743427",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\r\n  \"domains\": [\"www.baidu.com\", \"www.qq.com\"],\r\n  \"nodeIds\": \"31,32\",\r\n  \"ipWhitelist\": []\r\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://localhost:3000/api/batch-detect",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "batch-detect"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Batch job progress (recovery/progress tracking)",
+      "id": "ffe4f3c0-6ecc-4287-8bef-768ee9a2af8b",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/api/batch-detect/e8cbd0f6-68a1-44bc-a04d-857cdb090ec5",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "batch-detect",
+            "e8cbd0f6-68a1-44bc-a04d-857cdb090ec5"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Batch Job Items",
+      "id": "8dbc9a71-c860-4b4a-ac41-2341f6655fa4",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/api/batch-detect/e8cbd0f6-68a1-44bc-a04d-857cdb090ec5/items?status=FAILED&limit=50",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "batch-detect",
+            "e8cbd0f6-68a1-44bc-a04d-857cdb090ec5",
+            "items"
+          ],
+          "query": [
+            {
+              "key": "status",
+              "value": "FAILED",
+              "uuid": "9361cdd1-3653-4f4e-a85f-aa5c0d2a286e"
+            },
+            {
+              "key": "limit",
+              "value": "50",
+              "uuid": "0e7b0c58-a45c-470a-8c6d-d484c7d8202a"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "History (single detect)",
+      "id": "907bcc75-dc93-4c03-a031-72f8c2a3c47f",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/api/detect/history?url=www.baidu.com&limit=20",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "detect",
+            "history"
+          ],
+          "query": [
+            {
+              "key": "url",
+              "value": "www.baidu.com"
+            },
+            {
+              "key": "limit",
+              "value": "20"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Fetch by Request ID",
+      "id": "e28fb51b-ca31-4867-beae-2866b19f7a54",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/api/detect/results/3ad5f559-e00d-4430-b0ca-f98ba8b1b5fc",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "3000",
+          "path": [
+            "api",
+            "detect",
+            "results",
+            "3ad5f559-e00d-4430-b0ca-f98ba8b1b5fc"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
 }

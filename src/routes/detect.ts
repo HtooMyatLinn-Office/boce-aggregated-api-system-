@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { detectOnce } from '../services/detection/detect';
 import { DetectionRequest } from '../types';
 import { enqueueDetection, detectQueue } from '../services/queue/detectQueue';
-import { getDetectionByRequestId, listDetectionsByUrl, saveDetection } from '../services/db/detectionsRepo';
+import { getDetectionByRequestId, listDetectionHistoryByUrl, saveDetection } from '../services/db/detectionsRepo';
 import { BoceWorkflowError } from '../services/boce';
 
 export const detectRouter = Router();
@@ -94,7 +94,12 @@ detectRouter.get('/history', async (req, res) => {
     return;
   }
   const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 20;
-  const items = await listDetectionsByUrl(url, Number.isFinite(limit) ? limit : 20);
-  res.json({ success: true, url, count: items.length, items });
+  const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+  const { items, nextCursor } = await listDetectionHistoryByUrl({
+    url,
+    limit: Number.isFinite(limit) ? limit : 20,
+    cursor,
+  });
+  res.json({ success: true, url, count: items.length, items, nextCursor });
 });
 
