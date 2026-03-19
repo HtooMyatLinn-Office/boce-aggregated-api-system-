@@ -47,11 +47,13 @@ function parseWebhookUrl(webhookUrl: unknown): string | undefined {
 
 batchDetectRouter.post('/', async (req, res) => {
   const body = req.body as Partial<BatchDetectRequest>;
+  const client = req.authClient;
 
   const domains = parseDomains(body.domains);
   if (domains.length === 0) return res.status(400).json({ success: false, error: '`domains` is required' });
-  if (domains.length > 5000) {
-    return res.status(400).json({ success: false, error: 'too many domains (max 5000)' });
+  const maxBatchSize = Math.max(1, Math.min(client?.maxBatchSize ?? 5000, 5000));
+  if (domains.length > maxBatchSize) {
+    return res.status(400).json({ success: false, error: `too many domains (max ${maxBatchSize})` });
   }
 
   const nodeIdsRaw = typeof body.nodeIds === 'string' ? body.nodeIds : '';
@@ -66,7 +68,10 @@ batchDetectRouter.post('/', async (req, res) => {
   }
 
   // task-level webhook has highest priority, then app-level default config
-  const webhookUrl = parseWebhookUrl(body.webhookUrl) ?? parseWebhookUrl(config.integrations.webhookUrl);
+  const webhookUrl =
+    parseWebhookUrl(body.webhookUrl) ??
+    parseWebhookUrl(client?.defaultWebhookUrl) ??
+    parseWebhookUrl(config.integrations.webhookUrl);
   if (body.webhookUrl && !webhookUrl) {
     return res.status(400).json({ success: false, error: 'invalid `webhookUrl`' });
   }
@@ -101,7 +106,7 @@ batchDetectRouter.post('/', async (req, res) => {
     estimatedPoints,
     ipWhitelist: body.ipWhitelist,
     webhookUrl,
-    clientId: typeof body.clientId === 'string' ? body.clientId : undefined,
+    clientId: client?.clientId ?? (typeof body.clientId === 'string' ? body.clientId : undefined),
   });
 
   // Task scheduling: bulk enqueue so 5000 domains don't block the API (no 5k sequential Redis calls).

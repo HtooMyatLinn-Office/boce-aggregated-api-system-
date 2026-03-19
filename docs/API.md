@@ -56,6 +56,42 @@ Task scheduling is the core of the batch API. Here is how the system handles up 
 
 ---
 
+## Authentication (commercial mode)
+
+When `AUTH_ENABLED=true`, these business endpoints require headers:
+
+- `X-Client-Id: <client id>`
+- `X-Api-Key: <api key>`
+
+Protected routes:
+- `/api/detect/*`
+- `/api/batch-detect/*`
+
+Health and dev routes are unchanged (`/health`, `/api/dev/*`).
+
+Bootstrap (first client) is configured via env:
+- `BOOTSTRAP_CLIENT_ID`
+- `BOOTSTRAP_CLIENT_NAME`
+- `BOOTSTRAP_API_KEY`
+
+Static mode (single fixed key/client, no DB lookup):
+- `AUTH_STATIC_MODE=true`
+- `AUTH_STATIC_CLIENT_ID`
+- `AUTH_STATIC_API_KEY`
+- optional: `AUTH_STATIC_MAX_BATCH_SIZE`, `AUTH_STATIC_DEFAULT_WEBHOOK_URL`
+
+Example with headers:
+
+```bash
+curl -X POST "http://localhost:3000/api/detect" ^
+  -H "Content-Type: application/json" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key" ^
+  -d "{\"url\":\"www.baidu.com\",\"nodeIds\":\"31,32\"}"
+```
+
+---
+
 ## 1. Health
 
 ### `GET /health`

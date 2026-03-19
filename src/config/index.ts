@@ -38,4 +38,17 @@ export const config = {
     // App-level default webhook (lowest priority; task-level webhook overrides this)
     webhookUrl: process.env.APP_WEBHOOK_URL ?? '',
   },
+  auth: {
+    enabled: (process.env.AUTH_ENABLED ?? 'false') === 'true',
+    // Static mode: validate against fixed env client/key (no DB lookup)
+    staticMode: (process.env.AUTH_STATIC_MODE ?? 'false') === 'true',
+    staticClientId: process.env.AUTH_STATIC_CLIENT_ID ?? '',
+    staticApiKey: process.env.AUTH_STATIC_API_KEY ?? '',
+    staticClientName: process.env.AUTH_STATIC_CLIENT_NAME ?? 'Static Client',
+    staticMaxBatchSize: parseInt(process.env.AUTH_STATIC_MAX_BATCH_SIZE ?? '5000', 10),
+    staticDefaultWebhookUrl: process.env.AUTH_STATIC_DEFAULT_WEBHOOK_URL ?? '',
+    bootstrapClientId: process.env.BOOTSTRAP_CLIENT_ID ?? '',
+    bootstrapClientName: process.env.BOOTSTRAP_CLIENT_NAME ?? 'Default App',
+    bootstrapApiKey: process.env.BOOTSTRAP_API_KEY ?? '',
+  },
 } as const;

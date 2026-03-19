@@ -98,6 +98,23 @@ Copy `.env.example` to `.env` and edit.
 
 - **APP_WEBHOOK_URL**: optional default webhook URL for batch completion callbacks
 
+### Client auth (commercial mode)
+
+- **AUTH_ENABLED**: `true|false` (default `false`, keeps backward compatibility)
+- **AUTH_STATIC_MODE**: `true|false` (when true, use one fixed env key/client; no DB lookup)
+- **AUTH_STATIC_CLIENT_ID**: fixed client id for static mode
+- **AUTH_STATIC_API_KEY**: fixed API key for static mode
+- **AUTH_STATIC_CLIENT_NAME**: display name in static mode
+- **AUTH_STATIC_MAX_BATCH_SIZE**: max domains for static mode tenant (capped to 5000)
+- **AUTH_STATIC_DEFAULT_WEBHOOK_URL**: optional tenant default webhook in static mode
+- **BOOTSTRAP_CLIENT_ID**: initial client id to create on startup (when auth enabled)
+- **BOOTSTRAP_CLIENT_NAME**: initial client display name
+- **BOOTSTRAP_API_KEY**: initial client API key
+
+When enabled, call business APIs with headers:
+- `X-Client-Id`
+- `X-Api-Key`
+
 ### Node list refresh (Step 5)
 
 - **BOCE_NODE_REFRESH_HOURS**: default `6` (refresh once every N hours after program starts)

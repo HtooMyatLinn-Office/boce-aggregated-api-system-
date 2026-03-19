@@ -13,6 +13,31 @@ export async function migrate(): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_detections_url_created ON detections (url, created_at DESC);`);
 
+  // Client auth (commercial-ready foundation)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS client_apps (
+      id text PRIMARY KEY,
+      name text NOT NULL,
+      is_active boolean NOT NULL DEFAULT true,
+      default_webhook_url text,
+      max_batch_size int NOT NULL DEFAULT 5000,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id bigserial PRIMARY KEY,
+      client_id text NOT NULL REFERENCES client_apps(id) ON DELETE CASCADE,
+      key_hash text NOT NULL UNIQUE,
+      name text NOT NULL DEFAULT 'default',
+      is_active boolean NOT NULL DEFAULT true,
+      expires_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_keys_client_active ON api_keys (client_id, is_active);`);
+
   // Batch scan jobs (Steps 11+)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS scan_jobs (

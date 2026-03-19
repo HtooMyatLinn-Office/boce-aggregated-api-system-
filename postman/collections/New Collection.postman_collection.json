@@ -341,7 +341,20 @@
           "id": "78bde505-8105-49a0-9005-6fcdab743427",
           "request": {
             "method": "POST",
-            "header": [],
+            "header": [
+              {
+                "key": "X-Client-Id",
+                "value": "demo-client",
+                "type": "text",
+                "uuid": "5b3fff99-250d-4db0-bf55-6b2ac9a867df"
+              },
+              {
+                "key": "X-api-key",
+                "value": "abc123!@#",
+                "type": "text",
+                "uuid": "636c649d-d36a-4af5-908b-29a34a788abe"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\r\n  \"domains\": [\r\n    \"www.baidu.com\",\r\n    \"www.qq.com\",\r\n    \"www.taobao.com\"\r\n  ],\r\n  \"nodeIds\": \"31,32\",\r\n  \"webhookUrl\": \"https://webhooksite.net/04289fd6-184a-4371-b6ea-0c9e297fba73\"\r\n}",
