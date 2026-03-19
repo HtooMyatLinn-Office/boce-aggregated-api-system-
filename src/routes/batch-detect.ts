@@ -11,7 +11,7 @@ import {
   getScanJobStatus,
   listScanJobItems,
 } from '../services/db/scanJobsRepo';
-import { enqueueBatchDomain } from '../services/queue/batchQueue';
+import { enqueueBatchDomainsBulk } from '../services/queue/batchQueue';
 
 export const batchDetectRouter = express.Router();
 
@@ -82,11 +82,15 @@ batchDetectRouter.post('/', async (req, res) => {
     ipWhitelist: body.ipWhitelist,
   });
 
-  // Enqueue work for each domain
-  // Note: for very large batches, this could be optimized via bulk enqueue.
-  for (const domain of domains) {
-    await enqueueBatchDomain({ jobId: job.jobId, domain, nodeIds, ipWhitelist: body.ipWhitelist });
-  }
+  // Task scheduling: bulk enqueue so 5000 domains don't block the API (no 5k sequential Redis calls).
+  await enqueueBatchDomainsBulk(
+    domains.map((domain) => ({
+      jobId: job.jobId,
+      domain,
+      nodeIds,
+      ipWhitelist: body.ipWhitelist,
+    }))
+  );
 
   const statusUrl = `/api/batch-detect/${job.jobId}`;
   const response: BatchDetectJobResponse = {

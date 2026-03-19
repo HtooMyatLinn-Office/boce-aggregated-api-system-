@@ -81,8 +81,25 @@ export function startBatchDomainWorker(): void {
   });
 }
 
+/** Add a single domain job (e.g. for retries). */
 export async function enqueueBatchDomain(data: BatchDomainJobData) {
   const job = await batchDomainQueue.add('batchDomain', data);
   return job;
+}
+
+const BULK_CHUNK_SIZE = 1000;
+
+/**
+ * Enqueue many domain jobs in bulk (task scheduling for 100–5000 domains).
+ * Uses BullMQ addBulk in chunks to avoid a single huge Redis pipeline;
+ * API returns quickly after job creation and enqueue.
+ */
+export async function enqueueBatchDomainsBulk(data: BatchDomainJobData[]): Promise<void> {
+  for (let i = 0; i < data.length; i += BULK_CHUNK_SIZE) {
+    const chunk = data.slice(i, i + BULK_CHUNK_SIZE);
+    await batchDomainQueue.addBulk(
+      chunk.map((d) => ({ name: 'batchDomain' as const, data: d }))
+    );
+  }
 }
 
