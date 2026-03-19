@@ -1,4 +1,5 @@
 import express from 'express';
+import { config } from '../config';
 import { getBalanceWithConfig } from '../services/boce';
 import {
   BatchDetectJobResponse,
@@ -31,6 +32,19 @@ function parseDomains(domains: unknown): string[] {
   return domains.map(String).map((d) => d.trim()).filter(Boolean);
 }
 
+function parseWebhookUrl(webhookUrl: unknown): string | undefined {
+  if (typeof webhookUrl !== 'string') return undefined;
+  const v = webhookUrl.trim();
+  if (!v) return undefined;
+  try {
+    const u = new URL(v);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return undefined;
+    return v;
+  } catch {
+    return undefined;
+  }
+}
+
 batchDetectRouter.post('/', async (req, res) => {
   const body = req.body as Partial<BatchDetectRequest>;
 
@@ -49,6 +63,12 @@ batchDetectRouter.post('/', async (req, res) => {
     nodesPerTask = parsed.count;
   } catch (e) {
     return res.status(400).json({ success: false, error: 'invalid `nodeIds`' });
+  }
+
+  // task-level webhook has highest priority, then app-level default config
+  const webhookUrl = parseWebhookUrl(body.webhookUrl) ?? parseWebhookUrl(config.integrations.webhookUrl);
+  if (body.webhookUrl && !webhookUrl) {
+    return res.status(400).json({ success: false, error: 'invalid `webhookUrl`' });
   }
 
   // predictable-fee: 1 node = 1 point per domain task
@@ -80,6 +100,8 @@ batchDetectRouter.post('/', async (req, res) => {
     nodesPerTask,
     estimatedPoints,
     ipWhitelist: body.ipWhitelist,
+    webhookUrl,
+    clientId: typeof body.clientId === 'string' ? body.clientId : undefined,
   });
 
   // Task scheduling: bulk enqueue so 5000 domains don't block the API (no 5k sequential Redis calls).

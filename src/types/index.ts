@@ -80,6 +80,8 @@ export interface BatchDetectRequest {
   domains: string[];
   nodeIds: string; // e.g. "31,32"
   ipWhitelist?: string[];
+  webhookUrl?: string;
+  clientId?: string;
   // reserved for idempotency; optional for now
   idempotencyKey?: string;
   // reserved for future options

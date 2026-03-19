@@ -29,6 +29,7 @@ export async function migrate(): Promise<void> {
 
       node_ids text NOT NULL,
       ip_whitelist jsonb,
+      webhook_url text,
 
       -- status & progress
       status text NOT NULL CHECK (status IN ('PENDING','RUNNING','COMPLETED','FAILED','CANCELLED')),
@@ -36,7 +37,10 @@ export async function migrate(): Promise<void> {
       finished_items int NOT NULL DEFAULT 0,
       success_items int NOT NULL DEFAULT 0,
       failed_items int NOT NULL DEFAULT 0,
-      last_error text
+      last_error text,
+      callback_sent_at timestamptz,
+      callback_last_status text,
+      callback_last_error text
     );
   `);
 
@@ -120,6 +124,34 @@ export async function migrate(): Promise<void> {
         WHERE table_name='scan_jobs' AND column_name='failed_items'
       ) THEN
         EXECUTE 'ALTER TABLE scan_jobs ADD COLUMN failed_items int NOT NULL DEFAULT 0';
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='scan_jobs' AND column_name='webhook_url'
+      ) THEN
+        EXECUTE 'ALTER TABLE scan_jobs ADD COLUMN webhook_url text';
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='scan_jobs' AND column_name='callback_sent_at'
+      ) THEN
+        EXECUTE 'ALTER TABLE scan_jobs ADD COLUMN callback_sent_at timestamptz';
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='scan_jobs' AND column_name='callback_last_status'
+      ) THEN
+        EXECUTE 'ALTER TABLE scan_jobs ADD COLUMN callback_last_status text';
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='scan_jobs' AND column_name='callback_last_error'
+      ) THEN
+        EXECUTE 'ALTER TABLE scan_jobs ADD COLUMN callback_last_error text';
       END IF;
     END $$;
   `);

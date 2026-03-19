@@ -11,6 +11,8 @@ export async function createScanJob(params: {
   nodesPerTask: number;
   estimatedPoints: number;
   ipWhitelist?: string[];
+  webhookUrl?: string;
+  clientId?: string;
 }): Promise<{ jobId: string }> {
   const pool = getDbPool();
   const jobId = uuidv4();
@@ -19,26 +21,38 @@ export async function createScanJob(params: {
 
   await pool.query(
     `INSERT INTO scan_jobs
-      (id, url_count, nodes_per_task, estimated_points, node_ids, ip_whitelist, status, total_items)
-     VALUES ($1,$2,$3,$4,$5,$6,'PENDING',$7)`,
+      (id, client_id, url_count, nodes_per_task, estimated_points, node_ids, ip_whitelist, webhook_url, status, total_items)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'PENDING',$9)`,
     [
       jobId,
+      params.clientId ?? null,
       params.domains.length,
       params.nodesPerTask,
       params.estimatedPoints,
       params.nodeIds,
       ipWhitelistJson,
+      params.webhookUrl ?? null,
       params.domains.length,
     ]
   );
 
-  // Insert domain items
-  for (const domain of params.domains) {
-    const itemId = uuidv4();
+  // Insert domain items in chunks to avoid large write latency.
+  const INSERT_CHUNK_SIZE = 2000;
+  for (let i = 0; i < params.domains.length; i += INSERT_CHUNK_SIZE) {
+    const chunk = params.domains.slice(i, i + INSERT_CHUNK_SIZE);
+    const values: string[] = [];
+    const bind: unknown[] = [];
+    for (let idx = 0; idx < chunk.length; idx += 1) {
+      const id = uuidv4();
+      const domain = chunk[idx];
+      const n = bind.length;
+      values.push(`($${n + 1},$${n + 2},$${n + 3},$${n + 4},'QUEUED')`);
+      bind.push(id, jobId, domain, params.nodeIds);
+    }
     await pool.query(
       `INSERT INTO scan_job_domains (id, job_id, domain, node_ids, status)
-       VALUES ($1,$2,$3,$4,'QUEUED')`,
-      [itemId, jobId, domain, params.nodeIds]
+       VALUES ${values.join(',')}`,
+      bind
     );
   }
 
@@ -249,6 +263,62 @@ async function finalizeJobIfDone(client: { query: (q: string, params?: any[]) =>
      SET status=$2, updated_at=now()
      WHERE id=$1`,
     [jobId, newStatus]
+  );
+}
+
+export interface ScanJobWebhookPayload {
+  jobId: string;
+  status: ScanJobStatusWithCancelled;
+  totalItems: number;
+  finishedItems: number;
+  successItems: number;
+  failedItems: number;
+  estimatedPoints: number;
+  updatedAt: string;
+}
+
+/**
+ * Atomically claim webhook delivery once when the job reaches terminal state.
+ */
+export async function claimFinalizedJobWebhook(jobId: string): Promise<{ webhookUrl: string; payload: ScanJobWebhookPayload } | null> {
+  const pool = getDbPool();
+  const res = await pool.query(
+    `UPDATE scan_jobs
+     SET callback_sent_at = now(), callback_last_status = 'PENDING', updated_at = now()
+     WHERE id = $1
+       AND status IN ('COMPLETED', 'FAILED', 'CANCELLED')
+       AND callback_sent_at IS NULL
+       AND webhook_url IS NOT NULL
+     RETURNING id, webhook_url, status, total_items, finished_items, success_items, failed_items, estimated_points, updated_at`,
+    [jobId]
+  );
+
+  if ((res.rowCount ?? 0) === 0) return null;
+  const row = res.rows[0];
+  return {
+    webhookUrl: row.webhook_url as string,
+    payload: {
+      jobId: row.id,
+      status: row.status as ScanJobStatusWithCancelled,
+      totalItems: Number(row.total_items ?? 0),
+      finishedItems: Number(row.finished_items ?? 0),
+      successItems: Number(row.success_items ?? 0),
+      failedItems: Number(row.failed_items ?? 0),
+      estimatedPoints: Number(row.estimated_points ?? 0),
+      updatedAt: row.updated_at?.toISOString?.() ?? new Date().toISOString(),
+    },
+  };
+}
+
+export async function markJobWebhookResult(params: { jobId: string; ok: boolean; error?: string }): Promise<void> {
+  const pool = getDbPool();
+  await pool.query(
+    `UPDATE scan_jobs
+     SET callback_last_status = $2,
+         callback_last_error = $3,
+         updated_at = now()
+     WHERE id = $1`,
+    [params.jobId, params.ok ? 'SENT' : 'FAILED', params.error ?? null]
   );
 }
 

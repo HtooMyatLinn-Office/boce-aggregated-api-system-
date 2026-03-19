@@ -34,4 +34,8 @@ export const config = {
       maxRequests: parseInt(process.env.RATE_LIMIT_MAX ?? '30', 10),
     },
   },
+  integrations: {
+    // App-level default webhook (lowest priority; task-level webhook overrides this)
+    webhookUrl: process.env.APP_WEBHOOK_URL ?? '',
+  },
 } as const;

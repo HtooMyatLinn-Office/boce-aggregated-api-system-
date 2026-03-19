@@ -5,10 +5,12 @@ import { DetectionResult } from '../../types';
 import { detectOnce } from '../detection/detect';
 import { saveDetection } from '../db/detectionsRepo';
 import {
+  claimFinalizedJobWebhook,
   markDomainCompleted,
   markDomainFailed,
   markDomainRunning,
 } from '../db/scanJobsRepo';
+import { sendBatchCompletedWebhook } from '../webhook/batchWebhook';
 
 export const BATCH_DOMAIN_QUEUE_NAME = 'batch-domain';
 
@@ -50,8 +52,8 @@ export function startBatchDomainWorker(): void {
     async (job: Job<BatchDomainJobData, BatchDomainJobResult>) => {
       const { jobId, domain, nodeIds, ipWhitelist } = job.data;
 
-      const claimed = await markDomainRunning({ jobId, domain });
-      if (!claimed) return { ok: true };
+      const runningClaimed = await markDomainRunning({ jobId, domain });
+      if (!runningClaimed) return { ok: true };
 
       // detectOnce already performs points-safe and returns normalized/metrics/anomalies
       const result: DetectionResult = await detectOnce({ url: domain, nodeIds, ipWhitelist });
@@ -64,6 +66,15 @@ export function startBatchDomainWorker(): void {
         requestId: result.requestId,
         taskId: result.taskId,
       });
+
+      const webhookClaim = await claimFinalizedJobWebhook(jobId);
+      if (webhookClaim) {
+        await sendBatchCompletedWebhook({
+          jobId,
+          webhookUrl: webhookClaim.webhookUrl,
+          payload: webhookClaim.payload,
+        });
+      }
 
       return { ok: true, requestId: result.requestId };
     },
@@ -78,6 +89,14 @@ export function startBatchDomainWorker(): void {
     if (!data) return;
     const lastError = err?.message ?? 'unknown error';
     await markDomainFailed({ jobId: data.jobId, domain: data.domain, lastError });
+    const webhookClaim = await claimFinalizedJobWebhook(data.jobId);
+    if (webhookClaim) {
+      await sendBatchCompletedWebhook({
+        jobId: data.jobId,
+        webhookUrl: webhookClaim.webhookUrl,
+        payload: webhookClaim.payload,
+      });
+    }
   });
 }
 

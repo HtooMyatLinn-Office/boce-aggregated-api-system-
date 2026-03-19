@@ -94,6 +94,10 @@ Copy `.env.example` to `.env` and edit.
 
 - **DATABASE_URL**: e.g. `postgresql://boce:boce@localhost:5432/boce_api`
 
+### Webhook (application-level default)
+
+- **APP_WEBHOOK_URL**: optional default webhook URL for batch completion callbacks
+
 ### Node list refresh (Step 5)
 
 - **BOCE_NODE_REFRESH_HOURS**: default `6` (refresh once every N hours after program starts)

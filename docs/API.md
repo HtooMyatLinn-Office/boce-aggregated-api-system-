@@ -30,8 +30,10 @@ Task scheduling is the core of the batch API. Here is how the system handles up 
 1. **One scan job, many queue jobs**  
    `POST /api/batch-detect` creates a single **scan job** in the database (with `total_items`, `finished_items`, etc.) and inserts one row per domain in `scan_job_domains`. It then enqueues **one BullMQ job per domain** into the `batch-domain` queue. So 5000 domains ⇒ 1 scan job + 5000 queue jobs.
 
-2. **Bulk enqueue (no 5k sequential round-trips)**  
-   All domain jobs are added via **BullMQ `addBulk()`** in chunks of 1000. The HTTP request does **not** wait for 5000 sequential Redis calls: it creates the scan job, runs a few bulk adds, and returns immediately with `jobId` and `statusUrl`. Clients can poll `GET /api/batch-detect/:jobId` for progress.
+2. **Bulk enqueue + chunked DB writes**  
+   - Queue jobs are added via **BullMQ `addBulk()`** in chunks of 1000 (fast scheduling).  
+   - `scan_job_domains` rows are inserted in DB chunks of **2000** per SQL write (reduced write latency).  
+   The HTTP request does **not** wait for 5000 sequential Redis/DB writes. It creates the scan job, performs chunked inserts + bulk enqueues, and returns quickly with `jobId` and `statusUrl`.
 
 3. **Worker concurrency**  
    A single worker process runs with **concurrency** `QUEUE_CONCURRENCY` (default 5). So at any time up to N domains are being processed (each: create Boce task → poll result → normalize → save detection → update scan job counters). For faster completion of 5000 domains, increase `QUEUE_CONCURRENCY` (e.g. 10–20), respecting Boce rate limits and your own CPU/network.
@@ -45,6 +47,10 @@ Task scheduling is the core of the batch API. Here is how the system handles up 
    Before accepting the batch, the API calls Boce 波点查询 (`/v3/balance`). If available points are less than `domains.length × nodeIds.length`, the request fails with **402** and does not enqueue. Fee is 1 node = 1 point per domain task.
 
 **Summary for 5000 domains:** The API returns quickly after bulk-enqueuing 5000 jobs; the worker processes them at a controlled concurrency; progress is visible via the batch job and items endpoints; and 波点 is checked up front.
+
+6. **Webhook priority and usage**  
+   Webhook URL priority is: **task-level `webhookUrl` > app-level `APP_WEBHOOK_URL`**.  
+   App-level webhooks are useful as platform default. Task-level override is for application-specific integration.
 
 **Single-domain testing is not blocked by batch.** Single-domain requests use the **`detect`** queue (or run synchronously in the request); batch domain items use the **`batch-domain`** queue. They are processed by separate workers, so you can run `POST /api/detect` or `POST /api/detect?async=1` for one domain at any time, even while a 5000-domain batch is running.
 
@@ -346,13 +352,15 @@ When there are more pages, `nextCursor` is a string like `2026-03-17T02:10:11.00
 | domains | string[] | Yes | List of host/URLs to test |
 | nodeIds | string | Yes | Comma-separated node IDs (e.g. `31,32`) |
 | ipWhitelist | string[] | No | Optional IP whitelist per task |
+| webhookUrl | string | No | Task-level webhook callback URL (`http/https`) |
+| clientId | string | No | Optional application/client identifier for future auth/audit |
 
 **Example:**
 
 ```bash
 curl -X POST "http://localhost:3000/api/batch-detect" ^
   -H "Content-Type: application/json" ^
-  -d "{\"domains\":[\"www.baidu.com\",\"www.qq.com\"],\"nodeIds\":\"31,32\",\"ipWhitelist\":[]}"
+  -d "{\"domains\":[\"www.baidu.com\",\"www.qq.com\"],\"nodeIds\":\"31,32\",\"ipWhitelist\":[],\"webhookUrl\":\"https://example.com/webhooks/boce\"}"
 ```
 
 **Response (200):**
@@ -364,6 +372,15 @@ curl -X POST "http://localhost:3000/api/batch-detect" ^
   "estimatedPoints": 4,
   "totalItems": 2,
   "statusUrl": "/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f12345678901"
+}
+```
+
+**Response (400, invalid webhook):**
+
+```json
+{
+  "success": false,
+  "error": "invalid `webhookUrl`"
 }
 ```
 
@@ -502,6 +519,35 @@ curl "http://localhost:3000/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f1234567890
 ```
 
 **Response (404):** Same as job status (`error: "job not found"`).
+
+---
+
+## 10.1 Batch completion webhook callback
+
+When a batch reaches terminal state (`COMPLETED`/`FAILED`/`CANCELLED`) and webhook is configured, the system sends:
+
+- **Method:** `POST`
+- **Target:** task-level `webhookUrl` if provided, otherwise app-level `APP_WEBHOOK_URL`
+- **Event name:** `batch.detect.completed`
+
+**Payload:**
+
+```json
+{
+  "event": "batch.detect.completed",
+  "sentAt": "2026-03-18T09:00:00.000Z",
+  "data": {
+    "jobId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+    "status": "COMPLETED",
+    "totalItems": 2000,
+    "finishedItems": 2000,
+    "successItems": 1995,
+    "failedItems": 5,
+    "estimatedPoints": 4000,
+    "updatedAt": "2026-03-18T09:00:00.000Z"
+  }
+}
+```
 
 ---
 
