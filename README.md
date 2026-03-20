@@ -97,6 +97,7 @@ Copy `.env.example` to `.env` and edit.
 ### Webhook (application-level default)
 
 - **APP_WEBHOOK_URL**: optional default webhook URL for batch completion callbacks
+- **WEBHOOK_SIGNING_SECRET**: optional HMAC secret for webhook signature header `X-Boce-Signature`
 
 ### Client auth (commercial mode)
 
@@ -114,6 +115,7 @@ Copy `.env.example` to `.env` and edit.
 When enabled, call business APIs with headers:
 - `X-Client-Id`
 - `X-Api-Key`
+- `X-Idempotency-Key` (optional, recommended for safe retry of `POST /api/batch-detect`)
 
 ### Node list refresh (Step 5)
 

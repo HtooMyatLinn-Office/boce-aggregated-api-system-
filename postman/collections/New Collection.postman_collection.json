@@ -353,6 +353,12 @@
                 "value": "abc123!@#",
                 "type": "text",
                 "uuid": "636c649d-d36a-4af5-908b-29a34a788abe"
+              },
+              {
+                "key": "X-Idempotency-Key",
+                "value": "batch-001",
+                "type": "text",
+                "uuid": "7f7a06e0-ab6c-4e46-981b-bcc24e6ea1dc"
               }
             ],
             "body": {

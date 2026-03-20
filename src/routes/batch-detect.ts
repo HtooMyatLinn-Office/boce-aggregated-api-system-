@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import { config } from '../config';
 import { getBalanceWithConfig } from '../services/boce';
 import {
@@ -13,6 +14,11 @@ import {
   listScanJobItems,
 } from '../services/db/scanJobsRepo';
 import { enqueueBatchDomainsBulk } from '../services/queue/batchQueue';
+import {
+  attachIdempotencyJob,
+  IdempotencyConflictError,
+  reserveBatchIdempotency,
+} from '../services/db/batchIdempotencyRepo';
 
 export const batchDetectRouter = express.Router();
 
@@ -76,6 +82,44 @@ batchDetectRouter.post('/', async (req, res) => {
     return res.status(400).json({ success: false, error: 'invalid `webhookUrl`' });
   }
 
+  const clientId = client?.clientId ?? 'public';
+  const idempotencyKeyRaw =
+    (typeof body.idempotencyKey === 'string' ? body.idempotencyKey : undefined) ??
+    req.header('X-Idempotency-Key') ??
+    undefined;
+  const idempotencyKey = idempotencyKeyRaw?.trim() || undefined;
+  const requestHash = hashBatchRequest({
+    domains,
+    nodeIds,
+    ipWhitelist: body.ipWhitelist,
+    webhookUrl,
+    clientId,
+  });
+
+  if (idempotencyKey) {
+    try {
+      const idem = await reserveBatchIdempotency({
+        clientId,
+        idemKey: idempotencyKey,
+        requestHash,
+      });
+      if (idem.existingJobId) {
+        const statusUrl = `/api/batch-detect/${idem.existingJobId}`;
+        return res.json({
+          success: true,
+          replayed: true,
+          jobId: idem.existingJobId,
+          statusUrl,
+        });
+      }
+    } catch (e) {
+      if (e instanceof IdempotencyConflictError) {
+        return res.status(409).json({ success: false, error: e.message });
+      }
+      throw e;
+    }
+  }
+
   // predictable-fee: 1 node = 1 point per domain task
   const estimatedPoints = domains.length * nodesPerTask;
 
@@ -106,8 +150,17 @@ batchDetectRouter.post('/', async (req, res) => {
     estimatedPoints,
     ipWhitelist: body.ipWhitelist,
     webhookUrl,
-    clientId: client?.clientId ?? (typeof body.clientId === 'string' ? body.clientId : undefined),
+    clientId: clientId ?? (typeof body.clientId === 'string' ? body.clientId : undefined),
   });
+
+  if (idempotencyKey) {
+    await attachIdempotencyJob({
+      clientId,
+      idemKey: idempotencyKey,
+      requestHash,
+      jobId: job.jobId,
+    });
+  }
 
   // Task scheduling: bulk enqueue so 5000 domains don't block the API (no 5k sequential Redis calls).
   await enqueueBatchDomainsBulk(
@@ -138,6 +191,23 @@ batchDetectRouter.get('/:jobId', async (req, res) => {
     return res.status(404).json({ success: false, error: 'job not found' });
   }
 });
+
+function hashBatchRequest(params: {
+  domains: string[];
+  nodeIds: string;
+  ipWhitelist?: string[];
+  webhookUrl?: string;
+  clientId: string;
+}): string {
+  const normalized = {
+    domains: [...params.domains].sort(),
+    nodeIds: params.nodeIds,
+    ipWhitelist: [...(params.ipWhitelist ?? [])].sort(),
+    webhookUrl: params.webhookUrl ?? '',
+    clientId: params.clientId,
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
+}
 
 batchDetectRouter.get('/:jobId/items', async (req, res) => {
   const jobId = req.params.jobId;

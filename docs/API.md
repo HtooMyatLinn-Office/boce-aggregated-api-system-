@@ -390,6 +390,7 @@ When there are more pages, `nextCursor` is a string like `2026-03-17T02:10:11.00
 | ipWhitelist | string[] | No | Optional IP whitelist per task |
 | webhookUrl | string | No | Task-level webhook callback URL (`http/https`) |
 | clientId | string | No | Optional application/client identifier for future auth/audit |
+| idempotencyKey | string | No | Optional dedupe key for safe retries (or use `X-Idempotency-Key` header) |
 
 **Example:**
 
@@ -417,6 +418,15 @@ curl -X POST "http://localhost:3000/api/batch-detect" ^
 {
   "success": false,
   "error": "invalid `webhookUrl`"
+}
+```
+
+**Response (409, idempotency conflict):**
+
+```json
+{
+  "success": false,
+  "error": "Idempotency key is already used with different request payload"
 }
 ```
 
@@ -565,6 +575,9 @@ When a batch reaches terminal state (`COMPLETED`/`FAILED`/`CANCELLED`) and webho
 - **Method:** `POST`
 - **Target:** task-level `webhookUrl` if provided, otherwise app-level `APP_WEBHOOK_URL`
 - **Event name:** `batch.detect.completed`
+- **Headers:**  
+  - `X-Boce-Event: batch.detect.completed`  
+  - `X-Boce-Signature: sha256=<hmac>` (present when `WEBHOOK_SIGNING_SECRET` is configured)
 
 **Payload:**
 

@@ -37,6 +37,7 @@ export const config = {
   integrations: {
     // App-level default webhook (lowest priority; task-level webhook overrides this)
     webhookUrl: process.env.APP_WEBHOOK_URL ?? '',
+    webhookSigningSecret: process.env.WEBHOOK_SIGNING_SECRET ?? '',
   },
   auth: {
     enabled: (process.env.AUTH_ENABLED ?? 'false') === 'true',

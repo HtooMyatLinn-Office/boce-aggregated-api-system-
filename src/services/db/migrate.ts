@@ -38,6 +38,18 @@ export async function migrate(): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_keys_client_active ON api_keys (client_id, is_active);`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS batch_idempotency (
+      client_id text NOT NULL,
+      idem_key text NOT NULL,
+      request_hash text NOT NULL,
+      job_id uuid,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (client_id, idem_key)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_batch_idempotency_job ON batch_idempotency (job_id);`);
+
   // Batch scan jobs (Steps 11+)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS scan_jobs (
