@@ -90,6 +90,9 @@ curl -X POST "http://localhost:3000/api/detect" ^
   -d "{\"url\":\"www.baidu.com\",\"nodeIds\":\"31,32\"}"
 ```
 
+Optional reliability header for batch submit retries:
+- `X-Idempotency-Key: <unique key from your client>`
+
 ---
 
 ## 1. Health
@@ -133,6 +136,8 @@ OK
 ```bash
 curl -X POST "http://localhost:3000/api/detect" ^
   -H "Content-Type: application/json" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key" ^
   -d "{\"url\":\"www.baidu.com\",\"nodeIds\":\"31,32\",\"ipWhitelist\":[\"157.148.69.186\"]}"
 ```
 
@@ -202,6 +207,8 @@ curl -X POST "http://localhost:3000/api/detect" ^
 ```bash
 curl -X POST "http://localhost:3000/api/detect?async=1" ^
   -H "Content-Type: application/json" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key" ^
   -d "{\"url\":\"www.baidu.com\",\"nodeIds\":\"31,32\"}"
 ```
 
@@ -227,7 +234,9 @@ curl -X POST "http://localhost:3000/api/detect?async=1" ^
 **Example:**
 
 ```bash
-curl "http://localhost:3000/api/detect/jobs/123"
+curl "http://localhost:3000/api/detect/jobs/123" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key"
 ```
 
 **Response (200, completed):**
@@ -275,7 +284,9 @@ curl "http://localhost:3000/api/detect/jobs/123"
 **Example:**
 
 ```bash
-curl "http://localhost:3000/api/detect/results/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+curl "http://localhost:3000/api/detect/results/a1b2c3d4-e5f6-7890-abcd-ef1234567890" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key"
 ```
 
 **Response (200):**
@@ -324,13 +335,17 @@ curl "http://localhost:3000/api/detect/results/a1b2c3d4-e5f6-7890-abcd-ef1234567
 **Example (first page):**
 
 ```bash
-curl "http://localhost:3000/api/detect/history?url=www.baidu.com&limit=20"
+curl "http://localhost:3000/api/detect/history?url=www.baidu.com&limit=20" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key"
 ```
 
 **Example (next page):**
 
 ```bash
-curl "http://localhost:3000/api/detect/history?url=www.baidu.com&limit=20&cursor=2026-03-17T02:10:11.000Z|a1b2c3d4-1111-2222-3333-444455556666"
+curl "http://localhost:3000/api/detect/history?url=www.baidu.com&limit=20&cursor=2026-03-17T02:10:11.000Z|a1b2c3d4-1111-2222-3333-444455556666" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key"
 ```
 
 **Response (200):**
@@ -397,6 +412,9 @@ When there are more pages, `nextCursor` is a string like `2026-03-17T02:10:11.00
 ```bash
 curl -X POST "http://localhost:3000/api/batch-detect" ^
   -H "Content-Type: application/json" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key" ^
+  -H "X-Idempotency-Key: batch-001" ^
   -d "{\"domains\":[\"www.baidu.com\",\"www.qq.com\"],\"nodeIds\":\"31,32\",\"ipWhitelist\":[],\"webhookUrl\":\"https://example.com/webhooks/boce\"}"
 ```
 
@@ -427,6 +445,17 @@ curl -X POST "http://localhost:3000/api/batch-detect" ^
 {
   "success": false,
   "error": "Idempotency key is already used with different request payload"
+}
+```
+
+**Response (200, idempotency replay):**
+
+```json
+{
+  "success": true,
+  "replayed": true,
+  "jobId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+  "statusUrl": "/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f12345678901"
 }
 ```
 
@@ -477,7 +506,9 @@ curl -X POST "http://localhost:3000/api/batch-detect" ^
 **Example:**
 
 ```bash
-curl "http://localhost:3000/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f12345678901"
+curl "http://localhost:3000/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f12345678901" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key"
 ```
 
 **Response (200):**
@@ -527,13 +558,17 @@ curl "http://localhost:3000/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f1234567890
 **Example (all items):**
 
 ```bash
-curl "http://localhost:3000/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f12345678901/items?limit=50"
+curl "http://localhost:3000/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f12345678901/items?limit=50" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key"
 ```
 
 **Example (failed only):**
 
 ```bash
-curl "http://localhost:3000/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f12345678901/items?status=FAILED&limit=50"
+curl "http://localhost:3000/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f12345678901/items?status=FAILED&limit=50" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key"
 ```
 
 **Response (200):**
@@ -578,6 +613,10 @@ When a batch reaches terminal state (`COMPLETED`/`FAILED`/`CANCELLED`) and webho
 - **Headers:**  
   - `X-Boce-Event: batch.detect.completed`  
   - `X-Boce-Signature: sha256=<hmac>` (present when `WEBHOOK_SIGNING_SECRET` is configured)
+
+Receiver verification rule:
+- Compute `HMAC_SHA256(rawBody, WEBHOOK_SIGNING_SECRET)`.
+- Compare with `X-Boce-Signature` (format: `sha256=<hex>`).
 
 **Payload:**
 
