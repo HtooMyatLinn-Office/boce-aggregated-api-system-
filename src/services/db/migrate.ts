@@ -67,9 +67,10 @@ export async function migrate(): Promise<void> {
       node_ids text NOT NULL,
       ip_whitelist jsonb,
       webhook_url text,
+      priority int NOT NULL DEFAULT 0,
 
       -- status & progress
-      status text NOT NULL CHECK (status IN ('PENDING','RUNNING','COMPLETED','FAILED','CANCELLED')),
+      status text NOT NULL CHECK (status IN ('PENDING','RUNNING','PAUSED','COMPLETED','FAILED','CANCELLED')),
       total_items int NOT NULL,
       finished_items int NOT NULL DEFAULT 0,
       success_items int NOT NULL DEFAULT 0,
@@ -93,7 +94,7 @@ export async function migrate(): Promise<void> {
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
 
-      status text NOT NULL CHECK (status IN ('PENDING','QUEUED','RUNNING','COMPLETED','FAILED')),
+      status text NOT NULL CHECK (status IN ('PENDING','QUEUED','RUNNING','COMPLETED','FAILED','CANCELLED')),
 
       request_id uuid,
       task_id text,
@@ -190,6 +191,13 @@ export async function migrate(): Promise<void> {
       ) THEN
         EXECUTE 'ALTER TABLE scan_jobs ADD COLUMN callback_last_error text';
       END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='scan_jobs' AND column_name='priority'
+      ) THEN
+        EXECUTE 'ALTER TABLE scan_jobs ADD COLUMN priority int NOT NULL DEFAULT 0';
+      END IF;
     END $$;
   `);
 
@@ -218,7 +226,7 @@ export async function migrate(): Promise<void> {
       END LOOP;
 
       EXECUTE 'ALTER TABLE scan_jobs ADD CONSTRAINT scan_jobs_status_check
-        CHECK (status IN (''PENDING'',''RUNNING'',''COMPLETED'',''FAILED'',''CANCELLED''))';
+        CHECK (status IN (''PENDING'',''RUNNING'',''PAUSED'',''COMPLETED'',''FAILED'',''CANCELLED''))';
 
       -- scan_job_domains status check
       FOR r IN (
@@ -232,7 +240,7 @@ export async function migrate(): Promise<void> {
       END LOOP;
 
       EXECUTE 'ALTER TABLE scan_job_domains ADD CONSTRAINT scan_job_domains_status_check
-        CHECK (status IN (''PENDING'',''QUEUED'',''RUNNING'',''COMPLETED'',''FAILED''))';
+        CHECK (status IN (''PENDING'',''QUEUED'',''RUNNING'',''COMPLETED'',''FAILED'',''CANCELLED''))';
     END $$;
   `);
 }

@@ -19,7 +19,11 @@ This document lists every endpoint **in the recommended order to test** (health 
 | 7 | POST | `/api/batch-detect` | Batch submit (波点 pre-check, 100/5000 domains) |
 | 8 | GET | `/api/batch-detect/:jobId` | Batch job progress |
 | 9 | GET | `/api/batch-detect/:jobId/items` | Batch job items (per-domain status) |
-| 10 | GET | `/api/dev/nodes` *(dev only)* | Node cache snapshot |
+| 10 | POST | `/api/batch-detect/:jobId/pause` | Pause batch dispatch |
+| 11 | POST | `/api/batch-detect/:jobId/resume` | Resume batch dispatch |
+| 12 | POST | `/api/batch-detect/:jobId/cancel` | Cancel pending/queued batch items |
+| 13 | POST | `/api/batch-detect/:jobId/priority` | Change batch priority |
+| 14 | GET | `/api/dev/nodes` *(dev only)* | Node cache snapshot |
 
 ---
 
@@ -30,10 +34,10 @@ Task scheduling is the core of the batch API. Here is how the system handles up 
 1. **One scan job, many queue jobs**  
    `POST /api/batch-detect` creates a single **scan job** in the database (with `total_items`, `finished_items`, etc.) and inserts one row per domain in `scan_job_domains`. It then enqueues **one BullMQ job per domain** into the `batch-domain` queue. So 5000 domains ⇒ 1 scan job + 5000 queue jobs.
 
-2. **Bulk enqueue + chunked DB writes**  
-   - Queue jobs are added via **BullMQ `addBulk()`** in chunks of 1000 (fast scheduling).  
-   - `scan_job_domains` rows are inserted in DB chunks of **2000** per SQL write (reduced write latency).  
-   The HTTP request does **not** wait for 5000 sequential Redis/DB writes. It creates the scan job, performs chunked inserts + bulk enqueues, and returns quickly with `jobId` and `statusUrl`.
+2. **DB-first producer/consumer scheduling**  
+   - `scan_job_domains` rows are inserted in DB chunks of **2000** per SQL write.  
+   - Dispatcher periodically fetches `PENDING` rows from DB (ordered by priority) and enqueues them to Redis queue.  
+   - This gives operational control (pause/cancel/priority) from DB state while keeping queue as execution layer.
 
 3. **Worker concurrency**  
    A single worker process runs with **concurrency** `QUEUE_CONCURRENCY` (default 5). So at any time up to N domains are being processed (each: create Boce task → poll result → normalize → save detection → update scan job counters). For faster completion of 5000 domains, increase `QUEUE_CONCURRENCY` (e.g. 10–20), respecting Boce rate limits and your own CPU/network.
@@ -600,6 +604,52 @@ curl "http://localhost:3000/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f1234567890
 ```
 
 **Response (404):** Same as job status (`error: "job not found"`).
+
+---
+
+## 10. Batch control endpoints (commercial operations)
+
+### `POST /api/batch-detect/:jobId/pause`
+
+Pause dispatching new DB-pending items to queue.
+
+```bash
+curl -X POST "http://localhost:3000/api/batch-detect/<JOB_ID>/pause" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key"
+```
+
+### `POST /api/batch-detect/:jobId/resume`
+
+Resume dispatching for a paused job.
+
+```bash
+curl -X POST "http://localhost:3000/api/batch-detect/<JOB_ID>/resume" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key"
+```
+
+### `POST /api/batch-detect/:jobId/cancel`
+
+Cancel job and clean DB pending/queued items (already running items are allowed to finish).
+
+```bash
+curl -X POST "http://localhost:3000/api/batch-detect/<JOB_ID>/cancel" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key"
+```
+
+### `POST /api/batch-detect/:jobId/priority`
+
+Set batch priority (0..100). Dispatcher fetches higher priority first.
+
+```bash
+curl -X POST "http://localhost:3000/api/batch-detect/<JOB_ID>/priority" ^
+  -H "Content-Type: application/json" ^
+  -H "X-Client-Id: demo-client" ^
+  -H "X-Api-Key: change_me_to_strong_key" ^
+  -d "{\"priority\": 90}"
+```
 
 ---
 

@@ -9,11 +9,14 @@ import {
   ScanDomainItemStatus,
 } from '../types';
 import {
+  cancelScanJob,
   createScanJob,
   getScanJobStatus,
   listScanJobItems,
+  pauseScanJob,
+  resumeScanJob,
+  setScanJobPriority,
 } from '../services/db/scanJobsRepo';
-import { enqueueBatchDomainsBulk } from '../services/queue/batchQueue';
 import {
   attachIdempotencyJob,
   IdempotencyConflictError,
@@ -162,15 +165,7 @@ batchDetectRouter.post('/', async (req, res) => {
     });
   }
 
-  // Task scheduling: bulk enqueue so 5000 domains don't block the API (no 5k sequential Redis calls).
-  await enqueueBatchDomainsBulk(
-    domains.map((domain) => ({
-      jobId: job.jobId,
-      domain,
-      nodeIds,
-      ipWhitelist: body.ipWhitelist,
-    }))
-  );
+  // DB-first scheduling: dispatcher will fetch PENDING rows by priority and enqueue to Redis.
 
   const statusUrl = `/api/batch-detect/${job.jobId}`;
   const response: BatchDetectJobResponse = {
@@ -180,6 +175,35 @@ batchDetectRouter.post('/', async (req, res) => {
     statusUrl,
   };
   return res.json({ success: true, ...response });
+});
+
+batchDetectRouter.post('/:jobId/pause', async (req, res) => {
+  const ok = await pauseScanJob(req.params.jobId);
+  if (!ok) return res.status(404).json({ success: false, error: 'job not found or not pausable' });
+  return res.json({ success: true, jobId: req.params.jobId, status: 'PAUSED' });
+});
+
+batchDetectRouter.post('/:jobId/resume', async (req, res) => {
+  const ok = await resumeScanJob(req.params.jobId);
+  if (!ok) return res.status(404).json({ success: false, error: 'job not found or not resumable' });
+  return res.json({ success: true, jobId: req.params.jobId, status: 'PENDING' });
+});
+
+batchDetectRouter.post('/:jobId/cancel', async (req, res) => {
+  const ok = await cancelScanJob(req.params.jobId);
+  if (!ok) return res.status(404).json({ success: false, error: 'job not found or not cancellable' });
+  return res.json({ success: true, jobId: req.params.jobId, status: 'CANCELLED' });
+});
+
+batchDetectRouter.post('/:jobId/priority', async (req, res) => {
+  const pRaw = (req.body as { priority?: number })?.priority;
+  const priority = typeof pRaw === 'number' ? pRaw : Number(pRaw);
+  if (!Number.isFinite(priority)) {
+    return res.status(400).json({ success: false, error: 'priority must be a number' });
+  }
+  const ok = await setScanJobPriority(req.params.jobId, priority);
+  if (!ok) return res.status(404).json({ success: false, error: 'job not found' });
+  return res.json({ success: true, jobId: req.params.jobId, priority: Math.trunc(priority) });
 });
 
 batchDetectRouter.get('/:jobId', async (req, res) => {
@@ -215,7 +239,7 @@ batchDetectRouter.get('/:jobId/items', async (req, res) => {
   const statusParam = req.query.status;
   const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
 
-  const allowed: ScanDomainItemStatus[] = ['PENDING', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED'];
+  const allowed: ScanDomainItemStatus[] = ['PENDING', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'];
   const status = typeof statusParam === 'string' && allowed.includes(statusParam as ScanDomainItemStatus)
     ? (statusParam as ScanDomainItemStatus)
     : undefined;

@@ -2,8 +2,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { BatchDetectJobItem, BatchDetectJobStatusResponse } from '../../types';
 import { getDbPool } from './pool';
 
-type ScanJobStatusWithCancelled = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
-type ScanDomainItemStatus = 'PENDING' | 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+type ScanJobStatusWithCancelled = 'PENDING' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+type ScanDomainItemStatus = 'PENDING' | 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 
 export async function createScanJob(params: {
   domains: string[];
@@ -13,6 +13,7 @@ export async function createScanJob(params: {
   ipWhitelist?: string[];
   webhookUrl?: string;
   clientId?: string;
+  priority?: number;
 }): Promise<{ jobId: string }> {
   const pool = getDbPool();
   const jobId = uuidv4();
@@ -21,8 +22,8 @@ export async function createScanJob(params: {
 
   await pool.query(
     `INSERT INTO scan_jobs
-      (id, client_id, url_count, nodes_per_task, estimated_points, node_ids, ip_whitelist, webhook_url, status, total_items)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'PENDING',$9)`,
+      (id, client_id, url_count, nodes_per_task, estimated_points, node_ids, ip_whitelist, webhook_url, priority, status, total_items)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'PENDING',$10)`,
     [
       jobId,
       params.clientId ?? null,
@@ -32,6 +33,7 @@ export async function createScanJob(params: {
       params.nodeIds,
       ipWhitelistJson,
       params.webhookUrl ?? null,
+      params.priority ?? 0,
       params.domains.length,
     ]
   );
@@ -46,7 +48,7 @@ export async function createScanJob(params: {
       const id = uuidv4();
       const domain = chunk[idx];
       const n = bind.length;
-      values.push(`($${n + 1},$${n + 2},$${n + 3},$${n + 4},'QUEUED')`);
+      values.push(`($${n + 1},$${n + 2},$${n + 3},$${n + 4},'PENDING')`);
       bind.push(id, jobId, domain, params.nodeIds);
     }
     await pool.query(
@@ -75,7 +77,8 @@ export async function getScanJobStatus(jobId: string): Promise<BatchDetectJobSta
        total_items,
        finished_items,
        success_items,
-       failed_items
+       failed_items,
+       priority
      FROM scan_jobs
      WHERE id = $1`,
     [jobId]
@@ -320,5 +323,101 @@ export async function markJobWebhookResult(params: { jobId: string; ok: boolean;
      WHERE id = $1`,
     [params.jobId, params.ok ? 'SENT' : 'FAILED', params.error ?? null]
   );
+}
+
+export async function claimPendingDomainsForDispatch(limit: number): Promise<Array<{ jobId: string; domain: string; nodeIds: string; ipWhitelist?: string[] }>> {
+  const pool = getDbPool();
+  const capped = Math.max(1, Math.min(limit, 2000));
+  const res = await pool.query(
+    `WITH picked AS (
+      SELECT d.id
+      FROM scan_job_domains d
+      JOIN scan_jobs j ON j.id = d.job_id
+      WHERE d.status='PENDING'
+        AND j.status IN ('PENDING','RUNNING')
+      ORDER BY j.priority DESC, d.created_at ASC
+      LIMIT $1
+      FOR UPDATE OF d SKIP LOCKED
+    )
+    UPDATE scan_job_domains d
+    SET status='QUEUED', updated_at=now()
+    FROM picked
+    WHERE d.id = picked.id
+    RETURNING d.job_id, d.domain, d.node_ids`,
+    [capped]
+  );
+
+  return res.rows.map((r) => ({
+    jobId: r.job_id as string,
+    domain: r.domain as string,
+    nodeIds: r.node_ids as string,
+    ipWhitelist: undefined,
+  }));
+}
+
+export async function pauseScanJob(jobId: string): Promise<boolean> {
+  const pool = getDbPool();
+  const res = await pool.query(
+    `UPDATE scan_jobs
+     SET status='PAUSED', updated_at=now()
+     WHERE id=$1 AND status IN ('PENDING','RUNNING')
+     RETURNING id`,
+    [jobId]
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+export async function resumeScanJob(jobId: string): Promise<boolean> {
+  const pool = getDbPool();
+  const res = await pool.query(
+    `UPDATE scan_jobs
+     SET status='PENDING', updated_at=now()
+     WHERE id=$1 AND status IN ('PAUSED')
+     RETURNING id`,
+    [jobId]
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+export async function cancelScanJob(jobId: string): Promise<boolean> {
+  const pool = getDbPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const upd = await client.query(
+      `UPDATE scan_jobs
+       SET status='CANCELLED', updated_at=now()
+       WHERE id=$1 AND status NOT IN ('COMPLETED','FAILED','CANCELLED')
+       RETURNING id`,
+      [jobId]
+    );
+    if ((upd.rowCount ?? 0) === 0) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+    await client.query(
+      `UPDATE scan_job_domains
+       SET status='CANCELLED', updated_at=now(), last_error='cancelled by user'
+       WHERE job_id=$1 AND status IN ('PENDING','QUEUED')`,
+      [jobId]
+    );
+    await client.query('COMMIT');
+    return true;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+export async function setScanJobPriority(jobId: string, priority: number): Promise<boolean> {
+  const pool = getDbPool();
+  const p = Math.max(0, Math.min(100, Math.trunc(priority)));
+  const res = await pool.query(
+    `UPDATE scan_jobs SET priority=$2, updated_at=now() WHERE id=$1 RETURNING id`,
+    [jobId, p]
+  );
+  return (res.rowCount ?? 0) > 0;
 }
 

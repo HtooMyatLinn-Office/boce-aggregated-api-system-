@@ -73,8 +73,8 @@ export interface DetectionHistoryItem {
 
 // --- Batch detection (Steps 11 / supervisor requirements) ---
 
-export type ScanJobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
-export type ScanDomainItemStatus = 'PENDING' | 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+export type ScanJobStatus = 'PENDING' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type ScanDomainItemStatus = 'PENDING' | 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 
 export interface BatchDetectRequest {
   domains: string[];
