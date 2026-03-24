@@ -19,6 +19,7 @@ export interface BatchDomainJobData {
   domain: string;
   nodeIds: string;
   ipWhitelist?: string[];
+  clientId?: string;
 }
 
 export interface BatchDomainJobResult {
@@ -50,7 +51,7 @@ export function startBatchDomainWorker(): void {
   worker = new Worker<BatchDomainJobData, BatchDomainJobResult, string>(
     BATCH_DOMAIN_QUEUE_NAME,
     async (job: Job<BatchDomainJobData, BatchDomainJobResult>) => {
-      const { jobId, domain, nodeIds, ipWhitelist } = job.data;
+      const { jobId, domain, nodeIds, ipWhitelist, clientId } = job.data;
 
       const runningClaimed = await markDomainRunning({ jobId, domain });
       if (!runningClaimed) return { ok: true };
@@ -58,7 +59,7 @@ export function startBatchDomainWorker(): void {
       // detectOnce already performs points-safe and returns normalized/metrics/anomalies
       const result: DetectionResult = await detectOnce({ url: domain, nodeIds, ipWhitelist });
 
-      await saveDetection(result);
+      await saveDetection(result, clientId);
 
       await markDomainCompleted({
         jobId,

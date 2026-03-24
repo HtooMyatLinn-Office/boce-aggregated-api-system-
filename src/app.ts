@@ -7,6 +7,9 @@ import { detectRouter } from './routes/detect';
 import { batchDetectRouter } from './routes/batch-detect';
 import { rateLimit } from './middleware/rateLimit';
 import { requireClientAuth } from './middleware/clientAuth';
+import { analyticsRouter } from './routes/analytics';
+import { adminRouter } from './routes/admin';
+import { requireAdminToken } from './middleware/adminAuth';
 
 const app = express();
 
@@ -17,6 +20,8 @@ app.use('/health', healthRouter);
 mountDevRoutes(app);
 app.use('/api/detect', rateLimit, requireClientAuth, detectRouter);
 app.use('/api/batch-detect', rateLimit, requireClientAuth, batchDetectRouter);
+app.use('/api/analytics', rateLimit, requireClientAuth, analyticsRouter);
+app.use('/api/admin', requireAdminToken, adminRouter);
 
 // Placeholder for future unified detect API
 app.get('/', (_req, res) => {

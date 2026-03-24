@@ -325,12 +325,12 @@ export async function markJobWebhookResult(params: { jobId: string; ok: boolean;
   );
 }
 
-export async function claimPendingDomainsForDispatch(limit: number): Promise<Array<{ jobId: string; domain: string; nodeIds: string; ipWhitelist?: string[] }>> {
+export async function claimPendingDomainsForDispatch(limit: number): Promise<Array<{ jobId: string; domain: string; nodeIds: string; ipWhitelist?: string[]; clientId?: string }>> {
   const pool = getDbPool();
   const capped = Math.max(1, Math.min(limit, 2000));
   const res = await pool.query(
     `WITH picked AS (
-      SELECT d.id
+      SELECT d.id, j.client_id
       FROM scan_job_domains d
       JOIN scan_jobs j ON j.id = d.job_id
       WHERE d.status='PENDING'
@@ -343,7 +343,7 @@ export async function claimPendingDomainsForDispatch(limit: number): Promise<Arr
     SET status='QUEUED', updated_at=now()
     FROM picked
     WHERE d.id = picked.id
-    RETURNING d.job_id, d.domain, d.node_ids`,
+    RETURNING d.job_id, d.domain, d.node_ids, picked.client_id`,
     [capped]
   );
 
@@ -352,6 +352,7 @@ export async function claimPendingDomainsForDispatch(limit: number): Promise<Arr
     domain: r.domain as string,
     nodeIds: r.node_ids as string,
     ipWhitelist: undefined,
+    clientId: (r.client_id as string | null) ?? undefined,
   }));
 }
 

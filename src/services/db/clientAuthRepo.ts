@@ -69,3 +69,56 @@ export async function authenticateClient(params: {
   };
 }
 
+export async function createClientApp(params: {
+  clientId: string;
+  name: string;
+  defaultWebhookUrl?: string;
+  maxBatchSize?: number;
+}): Promise<void> {
+  const pool = getDbPool();
+  await pool.query(
+    `INSERT INTO client_apps (id, name, default_webhook_url, max_batch_size, is_active)
+     VALUES ($1, $2, $3, $4, true)
+     ON CONFLICT (id) DO UPDATE
+       SET name=EXCLUDED.name,
+           default_webhook_url=EXCLUDED.default_webhook_url,
+           max_batch_size=EXCLUDED.max_batch_size,
+           updated_at=now()`,
+    [
+      params.clientId,
+      params.name,
+      params.defaultWebhookUrl ?? null,
+      Math.max(1, Math.min(params.maxBatchSize ?? 5000, 5000)),
+    ]
+  );
+}
+
+export async function createClientApiKey(params: {
+  clientId: string;
+  name?: string;
+  expiresAt?: string;
+}): Promise<{ keyId: number; apiKey: string }> {
+  const pool = getDbPool();
+  const apiKey = `bk_${crypto.randomBytes(24).toString('hex')}`;
+  const keyHash = hashKey(apiKey);
+  const res = await pool.query(
+    `INSERT INTO api_keys (client_id, key_hash, name, is_active, expires_at)
+     VALUES ($1, $2, $3, true, $4)
+     RETURNING id`,
+    [params.clientId, keyHash, params.name ?? 'generated', params.expiresAt ?? null]
+  );
+  return { keyId: Number(res.rows[0].id), apiKey };
+}
+
+export async function revokeClientApiKey(params: { keyId: number }): Promise<boolean> {
+  const pool = getDbPool();
+  const res = await pool.query(
+    `UPDATE api_keys
+     SET is_active=false
+     WHERE id=$1 AND is_active=true
+     RETURNING id`,
+    [params.keyId]
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+

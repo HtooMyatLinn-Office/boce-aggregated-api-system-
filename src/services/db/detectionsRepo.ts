@@ -1,16 +1,17 @@
 import { DetectionHistoryItem, DetectionResult } from '../../types';
 import { getDbPool } from './pool';
 
-export async function saveDetection(result: DetectionResult): Promise<void> {
+export async function saveDetection(result: DetectionResult, clientId?: string): Promise<void> {
   const pool = getDbPool();
   await pool.query(
-    `INSERT INTO detections (request_id, task_id, url, result_json)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO detections (request_id, task_id, url, client_id, result_json)
+     VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (request_id) DO UPDATE
        SET task_id = EXCLUDED.task_id,
            url = EXCLUDED.url,
+           client_id = EXCLUDED.client_id,
            result_json = EXCLUDED.result_json`,
-    [result.requestId, result.taskId, result.url, result]
+    [result.requestId, result.taskId, result.url, clientId ?? null, result]
   );
 }
 
@@ -19,6 +20,36 @@ export async function getDetectionByRequestId(requestId: string): Promise<Detect
   const res = await pool.query(`SELECT result_json FROM detections WHERE request_id = $1`, [requestId]);
   if (res.rowCount === 0) return null;
   return res.rows[0].result_json as DetectionResult;
+}
+
+export async function getMonthlyClientAnalytics(params: {
+  clientId: string;
+  month: string; // YYYY-MM
+}): Promise<{
+  month: string;
+  totalChecks: number;
+  uniqueDomains: number;
+  avgAvailabilityRate: number;
+}> {
+  const pool = getDbPool();
+  const monthStr = params.month;
+  const res = await pool.query(
+    `SELECT
+      COUNT(*) as total_checks,
+      COUNT(DISTINCT url) as unique_domains,
+      COALESCE(AVG((result_json->'availability'->'global'->>'availabilityRate')::float), 0) as avg_rate
+     FROM detections
+     WHERE client_id = $1
+       AND to_char(created_at, 'YYYY-MM') = $2`,
+    [params.clientId, monthStr]
+  );
+  const row = res.rows[0] ?? {};
+  return {
+    month: monthStr,
+    totalChecks: Number(row.total_checks ?? 0),
+    uniqueDomains: Number(row.unique_domains ?? 0),
+    avgAvailabilityRate: Number(row.avg_rate ?? 0),
+  };
 }
 
 export async function listDetectionsByUrl(url: string, limit = 20): Promise<DetectionResult[]> {

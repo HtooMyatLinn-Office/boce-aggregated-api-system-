@@ -7,11 +7,14 @@ export async function migrate(): Promise<void> {
       request_id uuid PRIMARY KEY,
       task_id text NOT NULL,
       url text NOT NULL,
+      client_id text,
       created_at timestamptz NOT NULL DEFAULT now(),
       result_json jsonb NOT NULL
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_detections_url_created ON detections (url, created_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_detections_client_created ON detections (client_id, created_at DESC);`);
+  await pool.query(`ALTER TABLE detections ADD COLUMN IF NOT EXISTS client_id text;`);
 
   // Client auth (commercial-ready foundation)
   await pool.query(`

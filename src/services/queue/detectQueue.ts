@@ -49,7 +49,7 @@ export function startDetectWorker(): void {
       // timeout is enforced by BullMQ job option; detectOnce also polls Boce with 2min cap
       const result = await detectOnce(job.data);
       // persist result for traceability
-      await saveDetection(result);
+      await saveDetection(result, job.data.clientId);
       return result;
     },
     {

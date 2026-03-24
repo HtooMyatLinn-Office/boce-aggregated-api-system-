@@ -70,6 +70,7 @@ When `AUTH_ENABLED=true`, these business endpoints require headers:
 Protected routes:
 - `/api/detect/*`
 - `/api/batch-detect/*`
+- `/api/analytics/*`
 
 Health and dev routes are unchanged (`/health`, `/api/dev/*`).
 
@@ -96,6 +97,10 @@ curl -X POST "http://localhost:3000/api/detect" ^
 
 Optional reliability header for batch submit retries:
 - `X-Idempotency-Key: <unique key from your client>`
+
+Admin routes use separate header:
+- `X-Admin-Token: <ADMIN_TOKEN>`
+- `/api/admin/*` does not use `X-Client-Id` / `X-Api-Key`
 
 ---
 
@@ -689,7 +694,75 @@ Receiver verification rule:
 
 ---
 
-## 10. Dev: node list (development only)
+## 11. Admin APIs (key management)
+
+These endpoints are for platform operators.
+Required header: `X-Admin-Token`.
+
+### `POST /api/admin/clients`
+
+Create or update a client application.
+
+```bash
+curl -X POST "http://localhost:3000/api/admin/clients" ^
+  -H "Content-Type: application/json" ^
+  -H "X-Admin-Token: change_me_admin_token" ^
+  -d "{\"clientId\":\"biz-a\",\"name\":\"Business A\",\"defaultWebhookUrl\":\"https://example.com/hook\",\"maxBatchSize\":3000}"
+```
+
+### `POST /api/admin/clients/:clientId/keys`
+
+Create API key for a client (plaintext returned once).
+
+```bash
+curl -X POST "http://localhost:3000/api/admin/clients/biz-a/keys" ^
+  -H "Content-Type: application/json" ^
+  -H "X-Admin-Token: change_me_admin_token" ^
+  -d "{\"name\":\"prod-key-1\"}"
+```
+
+### `POST /api/admin/keys/:keyId/revoke`
+
+Revoke API key.
+
+```bash
+curl -X POST "http://localhost:3000/api/admin/keys/12/revoke" ^
+  -H "X-Admin-Token: change_me_admin_token"
+```
+
+---
+
+## 12. Analytics APIs (business-level summary)
+
+### `GET /api/analytics/clients/:clientId/monthly?month=YYYY-MM`
+
+Returns business category stats for a month:
+- `totalChecks`
+- `uniqueDomains`
+- `avgAvailabilityRate`
+
+```bash
+curl "http://localhost:3000/api/analytics/clients/biz-a/monthly?month=2026-03" ^
+  -H "X-Client-Id: biz-a" ^
+  -H "X-Api-Key: <biz-a-key>"
+```
+
+Example response:
+
+```json
+{
+  "success": true,
+  "clientId": "biz-a",
+  "month": "2026-03",
+  "totalChecks": 12500,
+  "uniqueDomains": 3200,
+  "avgAvailabilityRate": 0.9823
+}
+```
+
+---
+
+## 13. Dev: node list (development only)
 
 Available when `NODE_ENV=development`.
 

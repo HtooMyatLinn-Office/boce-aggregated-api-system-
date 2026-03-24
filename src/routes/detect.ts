@@ -24,7 +24,7 @@ detectRouter.post('/', async (req, res) => {
 
   try {
     if (asyncMode) {
-      const job = await enqueueDetection({ url, ipWhitelist, nodeIds });
+      const job = await enqueueDetection({ url, ipWhitelist, nodeIds, clientId: req.authClient?.clientId });
       res.status(202).json({
         success: true,
         mode: 'async',
@@ -34,9 +34,9 @@ detectRouter.post('/', async (req, res) => {
       return;
     }
 
-    const result = await detectOnce({ url, ipWhitelist, nodeIds });
+    const result = await detectOnce({ url, ipWhitelist, nodeIds, clientId: req.authClient?.clientId });
     // best-effort persistence
-    saveDetection(result).catch(() => undefined);
+    saveDetection(result, req.authClient?.clientId).catch(() => undefined);
     res.json({ success: true, mode: 'sync', data: result });
   } catch (e) {
     if (e instanceof BoceWorkflowError) {

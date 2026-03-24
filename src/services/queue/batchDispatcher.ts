@@ -13,6 +13,7 @@ async function dispatchOnce() {
       domain: r.domain,
       nodeIds: r.nodeIds,
       ipWhitelist: r.ipWhitelist,
+      clientId: r.clientId,
     }))
   );
 }

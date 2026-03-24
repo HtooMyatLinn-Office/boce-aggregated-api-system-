@@ -8,6 +8,7 @@ export interface DetectionRequest {
   ipWhitelist?: string[];
   nodeIds?: string;
   async?: boolean;
+  clientId?: string;
 }
 
 export type RegionGroup = 'CN' | 'Global' | 'Unknown';

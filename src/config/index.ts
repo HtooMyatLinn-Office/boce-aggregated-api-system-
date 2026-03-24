@@ -54,4 +54,7 @@ export const config = {
     bootstrapClientName: process.env.BOOTSTRAP_CLIENT_NAME ?? 'Default App',
     bootstrapApiKey: process.env.BOOTSTRAP_API_KEY ?? '',
   },
+  admin: {
+    token: process.env.ADMIN_TOKEN ?? '',
+  },
 } as const;
