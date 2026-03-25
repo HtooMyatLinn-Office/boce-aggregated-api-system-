@@ -12,9 +12,9 @@ export async function migrate(): Promise<void> {
       result_json jsonb NOT NULL
     );
   `);
+  await pool.query(`ALTER TABLE detections ADD COLUMN IF NOT EXISTS client_id text;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_detections_url_created ON detections (url, created_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_detections_client_created ON detections (client_id, created_at DESC);`);
-  await pool.query(`ALTER TABLE detections ADD COLUMN IF NOT EXISTS client_id text;`);
 
   // Client auth (commercial-ready foundation)
   await pool.query(`

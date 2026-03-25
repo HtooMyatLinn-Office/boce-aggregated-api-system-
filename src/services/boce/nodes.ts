@@ -96,9 +96,15 @@ class InMemoryNodeCache {
   startAutoRefresh(fn: () => Promise<unknown>, intervalHours: number): void {
     if (this.refreshTimer) return; // already started
     const intervalMs = Math.max(1, intervalHours) * 60 * 60 * 1000;
-    // refresh shortly after boot, then every N hours
-    void fn();
-    this.refreshTimer = setInterval(() => void fn(), intervalMs);
+    // refresh shortly after boot, then every N hours; fail-open on refresh errors.
+    void fn().catch((e) => {
+      console.warn('node cache initial refresh failed:', e instanceof Error ? e.message : e);
+    });
+    this.refreshTimer = setInterval(() => {
+      void fn().catch((e) => {
+        console.warn('node cache periodic refresh failed:', e instanceof Error ? e.message : e);
+      });
+    }, intervalMs);
     this.refreshTimer.unref?.();
   }
 }
