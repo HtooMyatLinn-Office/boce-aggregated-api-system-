@@ -123,6 +123,8 @@ When enabled, call business APIs with headers:
 
 ## API Documentation
 
+**OpenAPI spec (canonical):** [docs/openapi.yaml](docs/openapi.yaml)
+
 **Complete API doc (all endpoints, full request/response, in test order):** [docs/API.md](docs/API.md)
 
 Summary below. Base URL: `http://localhost:3000`.

@@ -1,5 +1,7 @@
 # Boce Aggregated API — Complete API Documentation
 
+> Canonical machine-readable API spec: `docs/openapi.yaml`
+
 Base URL for all examples: **`http://localhost:3000`** (or your deployed host).
 
 This document lists every endpoint **in the recommended order to test** (health → single detect → storage → batch detect).
@@ -23,7 +25,14 @@ This document lists every endpoint **in the recommended order to test** (health 
 | 11 | POST | `/api/batch-detect/:jobId/resume` | Resume batch dispatch |
 | 12 | POST | `/api/batch-detect/:jobId/cancel` | Cancel pending/queued batch items |
 | 13 | POST | `/api/batch-detect/:jobId/priority` | Change batch priority |
-| 14 | GET | `/api/dev/nodes` *(dev only)* | Node cache snapshot |
+| 14 | GET | `/api/dev/check-env` *(dev only)* | Verify runtime env visibility |
+| 15 | GET | `/api/dev/create-task` *(dev only)* | Create Boce task directly |
+| 16 | GET | `/api/dev/get-result` *(dev only)* | Get Boce result once |
+| 17 | GET | `/api/dev/poll-result` *(dev only)* | Poll Boce result until done |
+| 18 | GET | `/api/dev/run-detection` *(dev only)* | One-call create + poll |
+| 19 | GET | `/api/dev/nodes` *(dev only)* | Node cache snapshot |
+| 20 | POST | `/api/dev/nodes/refresh` *(dev only)* | Refresh node cache |
+| 21 | GET | `/api/dev/nodes/lookup` *(dev only)* | Lookup node metadata |
 
 ---
 
@@ -52,7 +61,7 @@ Task scheduling is the core of the batch API. Here is how the system handles up 
 5. **Predictable cost**  
    Before accepting the batch, the API calls Boce 波点查询 (`/v3/balance`). If available points are less than `domains.length × nodeIds.length`, the request fails with **402** and does not enqueue. Fee is 1 node = 1 point per domain task.
 
-**Summary for 5000 domains:** The API returns quickly after bulk-enqueuing 5000 jobs; the worker processes them at a controlled concurrency; progress is visible via the batch job and items endpoints; and 波点 is checked up front.
+**Summary for 5000 domains:** The API returns quickly after persisting DB tasks; dispatcher enqueues by priority in cycles; workers process with controlled concurrency; progress is visible via batch job/items endpoints; and 波点 is checked up front.
 
 6. **Webhook priority and usage**  
    Webhook URL priority is: **task-level `webhookUrl` > client-level default webhook > app-level `APP_WEBHOOK_URL`**.  
@@ -107,6 +116,24 @@ Admin routes use separate header:
 ---
 
 ## 1. Health
+
+### `GET /`
+
+Service metadata endpoint.
+
+```bash
+curl "http://localhost:3000/"
+```
+
+Example response:
+
+```json
+{
+  "name": "Boce Aggregated API System",
+  "version": "0.1.0",
+  "docs": { "health": "/health", "detect": "POST /api/detect" }
+}
+```
 
 ### `GET /health`
 
@@ -764,9 +791,49 @@ Example response:
 
 ---
 
-## 13. Dev: node list (development only)
+## 13. Dev APIs (development only)
 
 Available when `NODE_ENV=development`.
+
+### `GET /api/dev/check-env`
+
+Check whether runtime can see key/base URL values (masked-style diagnostics).
+
+```bash
+curl "http://localhost:3000/api/dev/check-env"
+```
+
+### `GET /api/dev/create-task?host=...&node_ids=...`
+
+Create Boce task directly and return task ID.
+
+```bash
+curl "http://localhost:3000/api/dev/create-task?host=www.baidu.com&node_ids=31,32"
+```
+
+### `GET /api/dev/get-result?taskId=...`
+
+Fetch Boce result once (`done` may be false).
+
+```bash
+curl "http://localhost:3000/api/dev/get-result?taskId=<TASK_ID>"
+```
+
+### `GET /api/dev/poll-result?taskId=...`
+
+Poll Boce result until done.
+
+```bash
+curl "http://localhost:3000/api/dev/poll-result?taskId=<TASK_ID>"
+```
+
+### `GET /api/dev/run-detection?host=...&node_ids=...`
+
+One-call create + poll helper.
+
+```bash
+curl "http://localhost:3000/api/dev/run-detection?host=www.baidu.com&node_ids=31,32"
+```
 
 ### `GET /api/dev/nodes`
 
