@@ -31,8 +31,10 @@ This document lists every endpoint **in the recommended order to test** (health 
 
 Task scheduling is the core of the batch API. Here is how the system handles up to **5000 domains** without timeouts or blocking.
 
-1. **One scan job, many queue jobs**  
-   `POST /api/batch-detect` creates a single **scan job** in the database (with `total_items`, `finished_items`, etc.) and inserts one row per domain in `scan_job_domains`. It then enqueues **one BullMQ job per domain** into the `batch-domain` queue. So 5000 domains ⇒ 1 scan job + 5000 queue jobs.
+1. **One scan job, DB-first task records**  
+   `POST /api/batch-detect` creates a single **scan job** in the database (with `total_items`, `finished_items`, etc.) and inserts one row per domain in `scan_job_domains` as `PENDING`.
+   Dispatcher then periodically fetches pending rows and submits BullMQ jobs to `batch-domain` queue by priority.  
+   For 5000 domains: 1 scan job + 5000 DB task rows, then queue jobs are produced in dispatch cycles.
 
 2. **DB-first producer/consumer scheduling**  
    - `scan_job_domains` rows are inserted in DB chunks of **2000** per SQL write.  
@@ -43,7 +45,7 @@ Task scheduling is the core of the batch API. Here is how the system handles up 
    A single worker process runs with **concurrency** `QUEUE_CONCURRENCY` (default 5). So at any time up to N domains are being processed (each: create Boce task → poll result → normalize → save detection → update scan job counters). For faster completion of 5000 domains, increase `QUEUE_CONCURRENCY` (e.g. 10–20), respecting Boce rate limits and your own CPU/network.
 
 4. **Progress and recovery**  
-   - **Progress:** `GET /api/batch-detect/:jobId` returns `finishedItems`, `successItems`, `failedItems`, and `status` (`PENDING` → `RUNNING` → `COMPLETED`/`FAILED`).  
+   - **Progress:** `GET /api/batch-detect/:jobId` returns `finishedItems`, `successItems`, `failedItems`, and `status` (`PENDING`/`RUNNING`/`PAUSED` → terminal).  
    - **Per-domain status:** `GET /api/batch-detect/:jobId/items?status=FAILED` lists failed domains for retry or inspection.  
    - **Recovery:** Jobs and progress live in Redis (BullMQ) and Postgres. After a restart, the worker continues processing remaining jobs; the scan job row stays consistent via `finished_items` / `success_items` / `failed_items` updates.
 
@@ -53,7 +55,7 @@ Task scheduling is the core of the batch API. Here is how the system handles up 
 **Summary for 5000 domains:** The API returns quickly after bulk-enqueuing 5000 jobs; the worker processes them at a controlled concurrency; progress is visible via the batch job and items endpoints; and 波点 is checked up front.
 
 6. **Webhook priority and usage**  
-   Webhook URL priority is: **task-level `webhookUrl` > app-level `APP_WEBHOOK_URL`**.  
+   Webhook URL priority is: **task-level `webhookUrl` > client-level default webhook > app-level `APP_WEBHOOK_URL`**.  
    App-level webhooks are useful as platform default. Task-level override is for application-specific integration.
 
 **Single-domain testing is not blocked by batch.** Single-domain requests use the **`detect`** queue (or run synchronously in the request); batch domain items use the **`batch-domain`** queue. They are processed by separate workers, so you can run `POST /api/detect` or `POST /api/detect?async=1` for one domain at any time, even while a 5000-domain batch is running.
@@ -403,7 +405,7 @@ When there are more pages, `nextCursor` is a string like `2026-03-17T02:10:11.00
 
 ### `POST /api/batch-detect`
 
-**Purpose:** Submit a batch of domains for detection. Uses Boce **波点查询** (`/v3/balance`) to pre-check points; fails with 402 if estimated points exceed available. Fee is predictable: 1 node × 1 point per domain. Max 5000 domains per request. **Task scheduling:** domains are enqueued in bulk (BullMQ `addBulk` in chunks of 1000), so the API returns quickly even for 5000 domains; see [Task scheduling (core): how we handle 5000 domains](#task-scheduling-core-how-we-handle-5000-domains) above.
+**Purpose:** Submit a batch of domains for detection. Uses Boce **波点查询** (`/v3/balance`) to pre-check points; fails with 402 if estimated points exceed available. Fee is predictable: 1 node × 1 point per domain. Max 5000 domains per request. **Task scheduling:** this endpoint persists tasks to DB first (`PENDING`), then dispatcher moves tasks from DB to queue by priority; see [Task scheduling (core): how we handle 5000 domains](#task-scheduling-core-how-we-handle-5000-domains) above.
 
 **Request body:**
 
@@ -538,7 +540,7 @@ curl "http://localhost:3000/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f1234567890
 }
 ```
 
-`status` is one of: `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`. When `status` is `COMPLETED` or `FAILED`, `finishedItems` equals `totalItems`.
+`status` is one of: `PENDING`, `RUNNING`, `PAUSED`, `COMPLETED`, `FAILED`, `CANCELLED`. When `status` is `COMPLETED` or `FAILED` or `CANCELLED`, `finishedItems` is terminal.
 
 **Response (404):**
 
@@ -561,7 +563,7 @@ curl "http://localhost:3000/api/batch-detect/b2c3d4e5-f6a7-8901-bcde-f1234567890
 
 | Name | Required | Description |
 |------|----------|-------------|
-| status | No | Filter: `PENDING`, `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED` |
+| status | No | Filter: `PENDING`, `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED` |
 | limit | No | 1–200, default 50 |
 
 **Example (all items):**
