@@ -8,6 +8,159 @@ This document lists every endpoint **in the recommended order to test** (health 
 
 ---
 
+## MCP API (AI Agent Tools)
+
+This service also exposes MCP tools over stdio for AI-agent workflows.
+
+### Server
+
+- Entry: `src/mcp/server.ts`
+- Start: `npm run mcp:start`
+- Dev: `npm run mcp:dev`
+
+### Cursor setup
+
+Configure project MCP file `./.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "user-boce-investigation": {
+      "command": "npm",
+      "args": ["run", "mcp:start"],
+      "cwd": "E:/develop-X/Boce-Aggregated-API-System"
+    }
+  }
+}
+```
+
+Reload Cursor window after saving config.
+
+### MCP tools
+
+#### 1) `certificate_summary`
+
+Checks DNS + TLS certificate for one domain.
+
+**Input schema (summary):**
+
+- `domain` (string, required)
+
+**Example call:**
+
+```text
+Call MCP tool certificate_summary with {"domain":"www.baidu.com"} and print raw output only.
+```
+
+**Output shape (compact text):**
+
+- `domain`
+- `certificate_ok`
+- `subject_cn`
+- `issuer_cn`
+- `valid_to`
+- `days_remaining`
+- `expires_soon`
+- `resolved_ips`
+- `error`
+
+#### 2) `boce_probe_summary`
+
+Runs Boce probe flow for one domain with compact output.
+
+**Input schema (summary):**
+
+- `domain` (string, required)
+- `nodeIds` (string, optional; example `31,32`)
+- `ipWhitelist` (string[], optional)
+
+**Example call:**
+
+```text
+Call MCP tool boce_probe_summary with {"domain":"www.baidu.com","nodeIds":"31,32"} and print raw output only.
+```
+
+**Output shape (compact text):**
+
+- `domain`
+- `final_status`
+- `summary`
+- `availability_rate`
+- `probes`
+- `anomaly_count`
+- `request_id`
+- `task_id`
+- optional `nodes_compact` lines (compressed details)
+
+#### 3) `investigate_domain`
+
+Runs probe summary + certificate summary and returns one concise final report.
+
+**Input schema (summary):**
+
+- `domain` (string, required)
+- `nodeIds` (string, optional)
+- `ipWhitelist` (string[], optional)
+
+**Example call:**
+
+```text
+Call MCP tool investigate_domain with {"domain":"www.baidu.com","nodeIds":"31,32"} and print raw output only.
+```
+
+**Output shape (compact text):**
+
+- `domain`
+- `final_status`
+- `flags`
+- `probe_status`
+- `probe_summary`
+- `availability_rate`
+- `probes`
+- `anomaly_count`
+- `request_id`
+- `task_id`
+- `certificate_ok`
+- `subject_cn`
+- `issuer_cn`
+- `valid_to`
+- `days_remaining`
+- `expires_soon`
+- `cert_error`
+- optional `nodes_compact` lines
+
+#### 4) `investigate_domains_batch`
+
+Investigates one or more domains in one call.
+
+**Input schema (summary):**
+
+- `domains` (string[], required, 1..20)
+- `nodeIds` (string, optional)
+- `ipWhitelist` (string[], optional)
+- `concurrency` (number, optional, 1..5, default 3)
+
+**Example call:**
+
+```text
+Call MCP tool investigate_domains_batch with {"domains":["www.baidu.com","www.qq.com"],"nodeIds":"31,32","concurrency":3} and print raw output only.
+```
+
+**Output shape (compact text):**
+
+- `batch_total`
+- `healthy_count`
+- `attention_required_count`
+- `failed_count`
+- `domains_compact` lines:
+  - `<domain> / <final_status> / avail <rate> / cert <bool> / flag <lead_flag>`
+
+### MCP output design note
+
+MCP responses are intentionally compressed to prevent context overflow while preserving final judgment.
+
+---
+
 ## Recommended test order
 
 | # | Method | Path | Purpose |

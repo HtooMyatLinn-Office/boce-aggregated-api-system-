@@ -127,6 +127,57 @@ When enabled, call business APIs with headers:
 
 **Complete API doc (all endpoints, full request/response, in test order):** [docs/API.md](docs/API.md)
 
+## MCP Support (AI Agent Integration)
+
+This project includes an MCP stdio server for agent-first domain investigation.
+
+### MCP server entrypoint
+
+- Source: `src/mcp/server.ts`
+- Build output: `dist/mcp/server.js`
+- Scripts:
+  - `npm run mcp:dev`
+  - `npm run mcp:start`
+
+### MCP tools (compact outputs, context-safe)
+
+- `certificate_summary`
+  - Input: `{ "domain": "www.baidu.com" }`
+  - Output: compact certificate health fields (`certificate_ok`, `issuer_cn`, `valid_to`, etc.)
+- `boce_probe_summary`
+  - Input: `{ "domain": "www.baidu.com", "nodeIds": "31,32", "ipWhitelist": ["1.2.3.4"] }`
+  - Output: compact probe verdict + optional compressed node lines
+- `investigate_domain`
+  - Input: same as `boce_probe_summary`
+  - Output: final compact report combining probe + certificate
+- `investigate_domains_batch`
+  - Input: `{ "domains": ["www.baidu.com", "www.qq.com"], "nodeIds": "31,32", "concurrency": 3 }`
+  - Output: compact batch counts + one compressed verdict line per domain
+
+All MCP responses are intentionally compressed to avoid context overflow while preserving final judgment.
+
+### Cursor MCP config (project-level)
+
+Create `./.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "user-boce-investigation": {
+      "command": "npm",
+      "args": ["run", "mcp:start"],
+      "cwd": "E:/develop-X/Boce-Aggregated-API-System"
+    }
+  }
+}
+```
+
+### Quick MCP test prompts (in Cursor chat)
+
+- `Call MCP tool certificate_summary with {"domain":"www.baidu.com"} and print raw output only.`
+- `Call MCP tool investigate_domain with {"domain":"www.baidu.com","nodeIds":"31,32"} and print raw output only.`
+- `Call MCP tool investigate_domains_batch with {"domains":["www.baidu.com","www.qq.com"],"nodeIds":"31,32"} and print raw output only.`
+
 Summary below. Base URL: `http://localhost:3000`.
 
 ### Health
