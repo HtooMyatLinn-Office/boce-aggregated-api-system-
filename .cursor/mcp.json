@@ -1,9 +1,7 @@
 {
   "mcpServers": {
     "user-boce-investigation": {
-      "command": "npm",
-      "args": ["run", "mcp:start"],
-      "cwd": "E:/develop-X/Boce-Aggregated-API-System"
+      "url": "http://localhost:3010/mcp"
     }
   }
 }

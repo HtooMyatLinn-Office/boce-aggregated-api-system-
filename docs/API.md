@@ -10,15 +10,17 @@ This document lists every endpoint **in the recommended order to test** (health 
 
 ## MCP API (AI Agent Tools)
 
-This service also exposes MCP tools over stdio for AI-agent workflows.
+This service also exposes MCP tools for AI-agent workflows.
 
 ### Server
 
 - Entry: `src/mcp/server.ts`
-- Start: `npm run mcp:start`
-- Dev: `npm run mcp:dev`
+- Start (Stream HTTP): `npm run mcp:start`
+- Dev (Stream HTTP): `npm run mcp:dev`
+- Debug (stdio): `npm run mcp:start:stdio`
+- Stream HTTP endpoint: `http://localhost:3010/mcp` (override via `MCP_PORT`)
 
-### Cursor setup
+### Cursor setup (stdio debug)
 
 Configure project MCP file `./.cursor/mcp.json`:
 
@@ -27,7 +29,7 @@ Configure project MCP file `./.cursor/mcp.json`:
   "mcpServers": {
     "user-boce-investigation": {
       "command": "npm",
-      "args": ["run", "mcp:start"],
+      "args": ["run", "mcp:start:stdio"],
       "cwd": "E:/develop-X/Boce-Aggregated-API-System"
     }
   }
@@ -35,6 +37,36 @@ Configure project MCP file `./.cursor/mcp.json`:
 ```
 
 Reload Cursor window after saving config.
+
+### Stream HTTP Quick Test
+
+Run this exact flow to verify Stream HTTP MCP end-to-end:
+
+1) Start server:
+
+```bash
+npm run mcp:start
+```
+
+2) Start custom client in another terminal:
+
+```bash
+npm run mcp:client
+```
+
+3) In client prompt:
+
+```text
+connect http://localhost:3010/mcp
+list-tools
+check www.baidu.com 31,32
+cert www.qq.com
+check-batch www.baidu.com,www.qq.com 31,32
+```
+
+Expected:
+- tools are listed successfully
+- commands return compact text output (not verbose nested JSON)
 
 ### MCP tools
 

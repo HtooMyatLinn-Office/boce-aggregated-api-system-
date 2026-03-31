@@ -1,7 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import dns from 'node:dns/promises';
 import tls from 'node:tls';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { detectOnce } from '../services/detection/detect';
 
@@ -30,10 +34,6 @@ function normalizeHost(input: string): string {
   const parsed = new URL(withScheme);
   if (!parsed.hostname) throw new Error('invalid domain');
   return parsed.hostname;
-}
-
-function compactJson(data: unknown): string {
-  return JSON.stringify(data, null, 2);
 }
 
 function compactLatency(ms?: number): string {
@@ -253,202 +253,291 @@ async function runCertCheck(host: string): Promise<CertCheckResult> {
   });
 }
 
-const server = new McpServer({
-  name: 'boce-aggregated-investigation',
-  version: '0.1.0',
-});
+function createServer(): McpServer {
+  const server = new McpServer({
+    name: 'boce-aggregated-investigation',
+    version: '0.1.0',
+  });
 
-server.registerTool(
-  'boce_probe_summary',
-  {
-    description:
-      'Run Boce probe flow for one domain and return compact summary (no raw probe dump).',
-    inputSchema: {
-      domain: z.string().min(1).describe('Domain or URL (e.g. www.baidu.com)'),
-      nodeIds: z.string().optional().describe('Comma-separated node IDs (e.g. 31,32)'),
-      ipWhitelist: z.array(z.string()).optional().describe('Optional expected response IP list'),
+  server.registerTool(
+    'boce_probe_summary',
+    {
+      description:
+        'Run Boce probe flow for one domain and return compact summary (no raw probe dump).',
+      inputSchema: {
+        domain: z.string().min(1).describe('Domain or URL (e.g. www.baidu.com)'),
+        nodeIds: z.string().optional().describe('Comma-separated node IDs (e.g. 31,32)'),
+        ipWhitelist: z.array(z.string()).optional().describe('Optional expected response IP list'),
+      },
     },
-  },
-  async ({ domain, nodeIds, ipWhitelist }) => {
-    const host = normalizeHost(domain);
-    const result = await detectOnce({ url: host, nodeIds, ipWhitelist });
-    const nodeLines = result.probes
-      .filter((p) => (p.statusCode ?? 0) < 200 || (p.statusCode ?? 0) >= 300 || !!p.boceError)
-      .slice(0, 12)
-      .map((p) => toNodeLine(p));
-    const compactText = formatProbeSummaryText({
-      domain: host,
-      requestId: result.requestId,
-      taskId: result.taskId,
-      overallStatus: result.summary.overallStatus,
-      summary: result.summary.message,
-      availabilityRate: Number(result.availability.global.availabilityRate.toFixed(4)),
-      totalProbes: result.availability.global.total,
-      successProbes: result.availability.global.success,
-      anomalyCount: result.anomalies.length,
-      nodeLines,
-    });
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: compactText,
-        },
-      ],
-    };
-  }
-);
-
-server.registerTool(
-  'certificate_summary',
-  {
-    description:
-      'Check DNS + TLS certificate for one domain and return minimal certificate health summary.',
-    inputSchema: {
-      domain: z.string().min(1).describe('Domain or URL (e.g. www.baidu.com)'),
-    },
-  },
-  async ({ domain }) => {
-    const host = normalizeHost(domain);
-    const cert = await runCertCheck(host);
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: formatCertSummaryText(cert),
-        },
-      ],
-    };
-  }
-);
-
-server.registerTool(
-  'investigate_domain',
-  {
-    description:
-      'Run Boce probe summary + certificate summary, then return one concise final investigation report.',
-    inputSchema: {
-      domain: z.string().min(1).describe('Domain or URL (e.g. www.baidu.com)'),
-      nodeIds: z.string().optional().describe('Comma-separated node IDs (e.g. 31,32)'),
-      ipWhitelist: z.array(z.string()).optional().describe('Optional expected response IP list'),
-    },
-  },
-  async ({ domain, nodeIds, ipWhitelist }) => {
-    const summary = await investigateOneDomain({ domain, nodeIds, ipWhitelist });
-
-    const report = [
-      `domain: ${summary.host}`,
-      `final_status: ${summary.finalStatus}`,
-      `flags: ${summary.flags.length ? summary.flags.join(', ') : '-'}`,
-      `probe_status: ${summary.probeStatus}`,
-      `probe_summary: ${summary.probeSummary}`,
-      `availability_rate: ${summary.availabilityRate}`,
-      `probes: ${summary.successProbes}/${summary.totalProbes}`,
-      `anomaly_count: ${summary.anomalyCount}`,
-      `request_id: ${summary.requestId}`,
-      `task_id: ${summary.taskId}`,
-      `certificate_ok: ${summary.certificateOk}`,
-      `subject_cn: ${summary.subjectCn ?? '-'}`,
-      `issuer_cn: ${summary.issuerCn ?? '-'}`,
-      `valid_to: ${summary.validTo ?? '-'}`,
-      `days_remaining: ${summary.daysRemaining ?? '-'}`,
-      `expires_soon: ${summary.expiresSoon ?? '-'}`,
-      `cert_error: ${summary.certError ?? '-'}`,
-    ];
-
-    if (summary.nodeLines.length > 0) {
-      report.push('nodes_compact:');
-      summary.nodeLines.forEach((line, i) => report.push(`${i + 1}. ${line}`));
+    async ({ domain, nodeIds, ipWhitelist }) => {
+      const host = normalizeHost(domain);
+      const result = await detectOnce({ url: host, nodeIds, ipWhitelist });
+      const nodeLines = result.probes
+        .filter((p) => (p.statusCode ?? 0) < 200 || (p.statusCode ?? 0) >= 300 || !!p.boceError)
+        .slice(0, 12)
+        .map((p) => toNodeLine(p));
+      const compactText = formatProbeSummaryText({
+        domain: host,
+        requestId: result.requestId,
+        taskId: result.taskId,
+        overallStatus: result.summary.overallStatus,
+        summary: result.summary.message,
+        availabilityRate: Number(result.availability.global.availabilityRate.toFixed(4)),
+        totalProbes: result.availability.global.total,
+        successProbes: result.availability.global.success,
+        anomalyCount: result.anomalies.length,
+        nodeLines,
+      });
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: compactText,
+          },
+        ],
+      };
     }
+  );
 
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: report.join('\n'),
-        },
-      ],
-    };
-  }
-);
-
-server.registerTool(
-  'investigate_domains_batch',
-  {
-    description:
-      'Investigate one or more domains in one call with compact per-domain verdict lines and summary counts.',
-    inputSchema: {
-      domains: z
-        .array(z.string().min(1))
-        .min(1)
-        .max(20)
-        .describe('One or more domains/URLs to investigate (max 20 per call)'),
-      nodeIds: z.string().optional().describe('Comma-separated node IDs (e.g. 31,32)'),
-      ipWhitelist: z.array(z.string()).optional().describe('Optional expected response IP list'),
-      concurrency: z
-        .number()
-        .int()
-        .min(1)
-        .max(5)
-        .optional()
-        .describe('Parallelism for checks (1-5, default 3)'),
+  server.registerTool(
+    'certificate_summary',
+    {
+      description:
+        'Check DNS + TLS certificate for one domain and return minimal certificate health summary.',
+      inputSchema: {
+        domain: z.string().min(1).describe('Domain or URL (e.g. www.baidu.com)'),
+      },
     },
-  },
-  async ({ domains, nodeIds, ipWhitelist, concurrency }) => {
-    const maxWorkers = concurrency ?? 3;
-    const queue = [...domains];
-    const rows: string[] = [];
-    let healthyCount = 0;
-    let attentionCount = 0;
-    let failedCount = 0;
+    async ({ domain }) => {
+      const host = normalizeHost(domain);
+      const cert = await runCertCheck(host);
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: formatCertSummaryText(cert),
+          },
+        ],
+      };
+    }
+  );
 
-    async function worker(): Promise<void> {
-      while (queue.length > 0) {
-        const domain = queue.shift();
-        if (!domain) return;
-        try {
-          const item = await investigateOneDomain({ domain, nodeIds, ipWhitelist });
-          if (item.finalStatus === 'HEALTHY') healthyCount += 1;
-          else attentionCount += 1;
-          const leadFlag = item.flags[0] ?? '-';
-          rows.push(
-            `${item.host} / ${item.finalStatus} / avail ${item.availabilityRate} / cert ${item.certificateOk} / flag ${leadFlag}`
-          );
-        } catch (e) {
-          failedCount += 1;
-          const host = domain.trim() || domain;
-          const msg = e instanceof Error ? e.message : 'unknown_error';
-          rows.push(`${host} / ERROR / avail - / cert - / flag ${msg}`);
+  server.registerTool(
+    'investigate_domain',
+    {
+      description:
+        'Run Boce probe summary + certificate summary, then return one concise final investigation report.',
+      inputSchema: {
+        domain: z.string().min(1).describe('Domain or URL (e.g. www.baidu.com)'),
+        nodeIds: z.string().optional().describe('Comma-separated node IDs (e.g. 31,32)'),
+        ipWhitelist: z.array(z.string()).optional().describe('Optional expected response IP list'),
+      },
+    },
+    async ({ domain, nodeIds, ipWhitelist }) => {
+      const summary = await investigateOneDomain({ domain, nodeIds, ipWhitelist });
+
+      const report = [
+        `domain: ${summary.host}`,
+        `final_status: ${summary.finalStatus}`,
+        `flags: ${summary.flags.length ? summary.flags.join(', ') : '-'}`,
+        `probe_status: ${summary.probeStatus}`,
+        `probe_summary: ${summary.probeSummary}`,
+        `availability_rate: ${summary.availabilityRate}`,
+        `probes: ${summary.successProbes}/${summary.totalProbes}`,
+        `anomaly_count: ${summary.anomalyCount}`,
+        `request_id: ${summary.requestId}`,
+        `task_id: ${summary.taskId}`,
+        `certificate_ok: ${summary.certificateOk}`,
+        `subject_cn: ${summary.subjectCn ?? '-'}`,
+        `issuer_cn: ${summary.issuerCn ?? '-'}`,
+        `valid_to: ${summary.validTo ?? '-'}`,
+        `days_remaining: ${summary.daysRemaining ?? '-'}`,
+        `expires_soon: ${summary.expiresSoon ?? '-'}`,
+        `cert_error: ${summary.certError ?? '-'}`,
+      ];
+
+      if (summary.nodeLines.length > 0) {
+        report.push('nodes_compact:');
+        summary.nodeLines.forEach((line, i) => report.push(`${i + 1}. ${line}`));
+      }
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: report.join('\n'),
+          },
+        ],
+      };
+    }
+  );
+
+  server.registerTool(
+    'investigate_domains_batch',
+    {
+      description:
+        'Investigate one or more domains in one call with compact per-domain verdict lines and summary counts.',
+      inputSchema: {
+        domains: z
+          .array(z.string().min(1))
+          .min(1)
+          .max(20)
+          .describe('One or more domains/URLs to investigate (max 20 per call)'),
+        nodeIds: z.string().optional().describe('Comma-separated node IDs (e.g. 31,32)'),
+        ipWhitelist: z.array(z.string()).optional().describe('Optional expected response IP list'),
+        concurrency: z
+          .number()
+          .int()
+          .min(1)
+          .max(5)
+          .optional()
+          .describe('Parallelism for checks (1-5, default 3)'),
+      },
+    },
+    async ({ domains, nodeIds, ipWhitelist, concurrency }) => {
+      const maxWorkers = concurrency ?? 3;
+      const queue = [...domains];
+      const rows: string[] = [];
+      let healthyCount = 0;
+      let attentionCount = 0;
+      let failedCount = 0;
+
+      async function worker(): Promise<void> {
+        while (queue.length > 0) {
+          const domain = queue.shift();
+          if (!domain) return;
+          try {
+            const item = await investigateOneDomain({ domain, nodeIds, ipWhitelist });
+            if (item.finalStatus === 'HEALTHY') healthyCount += 1;
+            else attentionCount += 1;
+            const leadFlag = item.flags[0] ?? '-';
+            rows.push(
+              `${item.host} / ${item.finalStatus} / avail ${item.availabilityRate} / cert ${item.certificateOk} / flag ${leadFlag}`
+            );
+          } catch (e) {
+            failedCount += 1;
+            const host = domain.trim() || domain;
+            const msg = e instanceof Error ? e.message : 'unknown_error';
+            rows.push(`${host} / ERROR / avail - / cert - / flag ${msg}`);
+          }
         }
       }
+
+      await Promise.all(Array.from({ length: Math.min(maxWorkers, domains.length) }, () => worker()));
+
+      const text = [
+        `batch_total: ${domains.length}`,
+        `healthy_count: ${healthyCount}`,
+        `attention_required_count: ${attentionCount}`,
+        `failed_count: ${failedCount}`,
+        'domains_compact:',
+        ...rows.map((line, i) => `${i + 1}. ${line}`),
+      ].join('\n');
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text,
+          },
+        ],
+      };
     }
+  );
 
-    await Promise.all(Array.from({ length: Math.min(maxWorkers, domains.length) }, () => worker()));
+  return server;
+}
 
-    const text = [
-      `batch_total: ${domains.length}`,
-      `healthy_count: ${healthyCount}`,
-      `attention_required_count: ${attentionCount}`,
-      `failed_count: ${failedCount}`,
-      'domains_compact:',
-      ...rows.map((line, i) => `${i + 1}. ${line}`),
-    ].join('\n');
-
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text,
-        },
-      ],
-    };
-  }
-);
-
-async function main(): Promise<void> {
+async function startStdioServer(): Promise<void> {
+  const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Boce investigation MCP server running on stdio');
+}
+
+async function startHttpServer(): Promise<void> {
+  const mcpPort = Number(process.env.MCP_PORT ?? '3010');
+  const app = createMcpExpressApp();
+  const transports: Record<string, StreamableHTTPServerTransport> = {};
+
+  app.post('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    try {
+      let transport: StreamableHTTPServerTransport | undefined;
+      if (sessionId && transports[sessionId]) {
+        transport = transports[sessionId];
+      } else if (!sessionId && isInitializeRequest(req.body)) {
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sid) => {
+            transports[sid] = transport!;
+          },
+        });
+        transport.onclose = () => {
+          const sid = transport!.sessionId;
+          if (sid && transports[sid]) delete transports[sid];
+        };
+        const server = createServer();
+        await server.connect(transport);
+      } else {
+        res.status(400).json({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
+          id: null,
+        });
+        return;
+      }
+      await transport.handleRequest(req, res, req.body);
+    } catch (e) {
+      console.error('MCP HTTP POST error:', e);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal server error' },
+          id: null,
+        });
+      }
+    }
+  });
+
+  app.get('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    if (!sessionId || !transports[sessionId]) {
+      res.status(400).send('Invalid or missing session ID');
+      return;
+    }
+    await transports[sessionId].handleRequest(req, res);
+  });
+
+  app.delete('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    if (!sessionId || !transports[sessionId]) {
+      res.status(400).send('Invalid or missing session ID');
+      return;
+    }
+    await transports[sessionId].handleRequest(req, res);
+  });
+
+  app.listen(mcpPort, () => {
+    console.error(`Boce investigation MCP server running on Stream HTTP :${mcpPort} at /mcp`);
+  });
+}
+
+function detectTransportMode(): 'stdio' | 'http' {
+  const arg = process.argv.find((a) => a.startsWith('--transport='));
+  const cli = arg?.split('=')[1];
+  const mode = (cli || process.env.MCP_TRANSPORT || 'http').toLowerCase();
+  return mode === 'stdio' ? 'stdio' : 'http';
+}
+
+async function main(): Promise<void> {
+  const mode = detectTransportMode();
+  if (mode === 'stdio') {
+    await startStdioServer();
+    return;
+  }
+  await startHttpServer();
 }
 
 main().catch((e) => {

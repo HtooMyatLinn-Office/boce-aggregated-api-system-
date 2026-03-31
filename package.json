@@ -6,9 +6,13 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "mcp:start": "node dist/mcp/server.js",
+    "mcp:start": "node dist/mcp/server.js --transport=http",
+    "mcp:start:http": "node dist/mcp/server.js --transport=http",
+    "mcp:start:stdio": "node dist/mcp/server.js --transport=stdio",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "mcp:dev": "ts-node-dev --respawn --transpile-only src/mcp/server.ts",
+    "mcp:dev": "ts-node-dev --respawn --transpile-only src/mcp/server.ts --transport=http",
+    "mcp:dev:stdio": "ts-node-dev --respawn --transpile-only src/mcp/server.ts --transport=stdio",
+    "mcp:client": "node scripts/mcp-client.cjs",
     "lint": "eslint src --ext .ts",
     "test": "jest",
     "test:watch": "jest --watch"

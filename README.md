@@ -129,15 +129,16 @@ When enabled, call business APIs with headers:
 
 ## MCP Support (AI Agent Integration)
 
-This project includes an MCP stdio server for agent-first domain investigation.
+This project includes an MCP server for agent-first domain investigation.
 
 ### MCP server entrypoint
 
 - Source: `src/mcp/server.ts`
 - Build output: `dist/mcp/server.js`
 - Scripts:
-  - `npm run mcp:dev`
-  - `npm run mcp:start`
+  - `npm run mcp:start` (Stream HTTP, default, production)
+  - `npm run mcp:dev` (Stream HTTP, dev)
+  - `npm run mcp:start:stdio` (stdio, local debug)
 
 ### MCP tools (compact outputs, context-safe)
 
@@ -158,19 +159,50 @@ All MCP responses are intentionally compressed to avoid context overflow while p
 
 ### Cursor MCP config (project-level)
 
-Create `./.cursor/mcp.json`:
+For local Cursor tool-debug via stdio, create `./.cursor/mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "user-boce-investigation": {
       "command": "npm",
-      "args": ["run", "mcp:start"],
+      "args": ["run", "mcp:start:stdio"],
       "cwd": "E:/develop-X/Boce-Aggregated-API-System"
     }
   }
 }
 ```
+
+For remote MCP clients, use Stream HTTP endpoint:
+
+- URL: `http://localhost:3010/mcp`
+- Port can be overridden with `MCP_PORT`
+
+### Stream HTTP Quick Test (2 minutes)
+
+1. Start MCP server (Stream HTTP):
+
+```bash
+npm run mcp:start
+```
+
+2. In a second terminal, start the custom MCP client:
+
+```bash
+npm run mcp:client
+```
+
+3. In the client prompt, run:
+
+```text
+connect http://localhost:3010/mcp
+list-tools
+check www.baidu.com 31,32
+```
+
+Expected:
+- `list-tools` shows the 4 MCP tools
+- `check` returns compact text report (`final_status`, `availability_rate`, `certificate_ok`, optional `nodes_compact`)
 
 ### Quick MCP test prompts (in Cursor chat)
 
