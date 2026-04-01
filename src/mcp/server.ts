@@ -123,10 +123,16 @@ async function runBatchTask(taskId: string): Promise<void> {
 
   try {
     for (const domain of task.domains) {
-      const result = await probeOneDomain(domain, task.nodeIds, task.ipWhitelist);
-      task.results.push(result);
-      task.completed.push(result.domain);
-      task.remaining = task.remaining.filter((d) => normalizeHost(d) !== result.domain);
+      try {
+        const result = await probeOneDomain(domain, task.nodeIds, task.ipWhitelist);
+        task.results.push(result);
+        task.completed.push(result.domain);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'unknown_error';
+        task.errors.push({ domain, error: msg });
+      }
+      // task.domains and task.remaining are already normalized at batch_start.
+      task.remaining = task.remaining.filter((d) => d !== domain);
       task.progress = Math.floor((task.completed.length / task.domains.length) * 100);
       task.updatedAt = Date.now();
     }
@@ -134,9 +140,9 @@ async function runBatchTask(taskId: string): Promise<void> {
     task.progress = 100;
     task.updatedAt = Date.now();
   } catch (e) {
+    // Fatal safeguard: unexpected loop-level error.
     const msg = e instanceof Error ? e.message : 'unknown_error';
-    const remainingDomain = task.remaining[0] ?? task.domains.find((d) => !task.completed.includes(d));
-    if (remainingDomain) task.errors.push({ domain: remainingDomain, error: msg });
+    task.errors.push({ domain: 'batch_runtime', error: msg });
     task.status = 'failed';
     task.updatedAt = Date.now();
   }
