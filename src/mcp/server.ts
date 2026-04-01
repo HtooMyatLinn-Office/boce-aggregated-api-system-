@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import dns from 'node:dns/promises';
-import tls from 'node:tls';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -9,23 +7,34 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { detectOnce } from '../services/detection/detect';
 
-type CertCheckResult = {
-  ok: boolean;
-  host: string;
-  resolvedIps: string[];
-  issuerCn?: string;
-  subjectCn?: string;
-  validFrom?: string;
-  validTo?: string;
-  daysRemaining?: number;
-  expiresSoon?: boolean;
-  error?: string;
+const DEFAULT_POLL_INTERVAL_MS = 10_000;
+
+type BatchTaskStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+type DomainResult = {
+  domain: string;
+  finalStatus: 'HEALTHY' | 'ATTENTION_REQUIRED';
+  availabilityRate: number;
+  flag: string;
+  nodeCompact?: string;
 };
 
-function pickString(value: string | string[] | undefined): string | undefined {
-  if (!value) return undefined;
-  return Array.isArray(value) ? value[0] : value;
-}
+type BatchTask = {
+  taskId: string;
+  status: BatchTaskStatus;
+  domains: string[];
+  nodeIds?: string;
+  ipWhitelist?: string[];
+  pollInterval: number;
+  completed: string[];
+  remaining: string[];
+  results: DomainResult[];
+  errors: { domain: string; error: string }[];
+  progress: number;
+  updatedAt: number;
+};
+
+const batchTasks = new Map<string, BatchTask>();
 
 function normalizeHost(input: string): string {
   const raw = input.trim();
@@ -50,7 +59,7 @@ function toNodeLine(node: {
   responseIp?: string;
   boceError?: string;
 }): string {
-  const place = node.nodeName ?? node.ispName ?? node.region ?? `node`;
+  const place = node.nodeName ?? node.ispName ?? node.region ?? 'node';
   const latency = compactLatency(node.latencyMs);
   const status = node.statusCode ?? '-';
   const ip = node.responseIp ?? '-';
@@ -58,199 +67,73 @@ function toNodeLine(node: {
   return `${place} / ${latency} / status ${status} / ${ip}${err}`;
 }
 
-function formatProbeSummaryText(input: {
-  domain: string;
-  requestId: string;
-  taskId: string;
-  overallStatus: string;
-  summary: string;
-  availabilityRate: number;
-  totalProbes: number;
-  successProbes: number;
-  anomalyCount: number;
-  nodeLines: string[];
-}): string {
-  const lines: string[] = [
-    `domain: ${input.domain}`,
-    `final_status: ${input.overallStatus}`,
-    `summary: ${input.summary}`,
-    `availability_rate: ${input.availabilityRate}`,
-    `probes: ${input.successProbes}/${input.totalProbes}`,
-    `anomaly_count: ${input.anomalyCount}`,
-    `request_id: ${input.requestId}`,
-    `task_id: ${input.taskId}`,
-  ];
-
-  if (input.nodeLines.length > 0) {
-    lines.push('nodes_compact:');
-    input.nodeLines.forEach((line, i) => lines.push(`${i + 1}. ${line}`));
-  }
-
-  return lines.join('\n');
-}
-
-function formatCertSummaryText(cert: CertCheckResult): string {
-  return [
-    `domain: ${cert.host}`,
-    `certificate_ok: ${cert.ok}`,
-    `subject_cn: ${cert.subjectCn ?? '-'}`,
-    `issuer_cn: ${cert.issuerCn ?? '-'}`,
-    `valid_to: ${cert.validTo ?? '-'}`,
-    `days_remaining: ${cert.daysRemaining ?? '-'}`,
-    `expires_soon: ${cert.expiresSoon ?? '-'}`,
-    `resolved_ips: ${cert.resolvedIps.join(',') || '-'}`,
-    `error: ${cert.error ?? '-'}`,
-  ].join('\n');
-}
-
-type InvestigationSummary = {
-  host: string;
-  finalStatus: 'HEALTHY' | 'ATTENTION_REQUIRED';
-  flags: string[];
-  probeStatus: string;
-  probeSummary: string;
-  availabilityRate: number;
-  successProbes: number;
-  totalProbes: number;
-  anomalyCount: number;
-  requestId: string;
-  taskId: string;
-  certificateOk: boolean;
-  subjectCn?: string;
-  issuerCn?: string;
-  validTo?: string;
-  daysRemaining?: number;
-  expiresSoon?: boolean;
-  certError?: string;
-  nodeLines: string[];
-};
-
-function summarizeInvestigation(input: {
-  host: string;
-  probe: Awaited<ReturnType<typeof detectOnce>>;
-  cert: CertCheckResult;
-}): InvestigationSummary {
-  const { host, probe, cert } = input;
-  const flags: string[] = [];
-  if (probe.summary.overallStatus !== 'HEALTHY') flags.push(`probe_status=${probe.summary.overallStatus}`);
-  if (!cert.ok) flags.push('certificate_check_failed');
-  if (cert.expiresSoon) flags.push('certificate_expiring_soon');
-
-  const nodeLines = probe.probes
-    .filter((p) => (p.statusCode ?? 0) < 200 || (p.statusCode ?? 0) >= 300 || !!p.boceError)
-    .slice(0, 12)
-    .map((p) => toNodeLine(p));
-
+function buildNextStep(taskId: string, delayMs: number): Record<string, unknown> {
   return {
-    host,
-    finalStatus: flags.length === 0 ? 'HEALTHY' : 'ATTENTION_REQUIRED',
-    flags,
-    probeStatus: probe.summary.overallStatus,
-    probeSummary: probe.summary.message,
-    availabilityRate: Number(probe.availability.global.availabilityRate.toFixed(4)),
-    successProbes: probe.availability.global.success,
-    totalProbes: probe.availability.global.total,
-    anomalyCount: probe.anomalies.length,
-    requestId: probe.requestId,
-    taskId: probe.taskId,
-    certificateOk: cert.ok,
-    subjectCn: cert.subjectCn,
-    issuerCn: cert.issuerCn,
-    validTo: cert.validTo,
-    daysRemaining: cert.daysRemaining,
-    expiresSoon: cert.expiresSoon,
-    certError: cert.error,
-    nodeLines,
+    action: 'call_tool',
+    tool: 'probe_domains_batch_status',
+    arguments: { taskId },
+    schedule: { delayMs },
   };
 }
 
-async function investigateOneDomain(input: {
-  domain: string;
-  nodeIds?: string;
-  ipWhitelist?: string[];
-}): Promise<InvestigationSummary> {
-  const host = normalizeHost(input.domain);
-  const [probe, cert] = await Promise.all([
-    detectOnce({ url: host, nodeIds: input.nodeIds, ipWhitelist: input.ipWhitelist }),
-    runCertCheck(host),
-  ]);
-  return summarizeInvestigation({ host, probe, cert });
+function statusPayload(task: BatchTask): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    taskId: task.taskId,
+    status: task.status,
+    progress: task.progress,
+    completed: task.completed,
+    remaining: task.remaining,
+    pollInterval: task.pollInterval,
+  };
+  if (task.status === 'pending' || task.status === 'running') {
+    base.nextStep = buildNextStep(task.taskId, task.pollInterval);
+  }
+  return base;
 }
 
-async function runCertCheck(host: string): Promise<CertCheckResult> {
-  const resolvedIps = await dns.resolve4(host).catch(() => []);
-  return new Promise<CertCheckResult>((resolve) => {
-    const socket = tls.connect(
-      {
-        host,
-        port: 443,
-        servername: host,
-        rejectUnauthorized: false,
-        timeout: 8000,
-      },
-      () => {
-        try {
-          const cert = socket.getPeerCertificate();
-          socket.end();
+async function probeOneDomain(domain: string, nodeIds?: string, ipWhitelist?: string[]): Promise<DomainResult> {
+  const host = normalizeHost(domain);
+  const probe = await detectOnce({ url: host, nodeIds, ipWhitelist });
+  const availabilityRate = Number(probe.availability.global.availabilityRate.toFixed(4));
+  const isHealthy = probe.summary.overallStatus === 'HEALTHY';
+  const nodeCompact = probe.probes
+    .filter((p) => (p.statusCode ?? 0) < 200 || (p.statusCode ?? 0) >= 300 || !!p.boceError)
+    .slice(0, 1)
+    .map((p) => toNodeLine(p))[0];
+  return {
+    domain: host,
+    finalStatus: isHealthy ? 'HEALTHY' : 'ATTENTION_REQUIRED',
+    availabilityRate,
+    flag: isHealthy ? '-' : `probe_status=${probe.summary.overallStatus}`,
+    nodeCompact,
+  };
+}
 
-          if (!cert || Object.keys(cert).length === 0) {
-            resolve({
-              ok: false,
-              host,
-              resolvedIps,
-              error: 'No certificate received from endpoint',
-            });
-            return;
-          }
+async function runBatchTask(taskId: string): Promise<void> {
+  const task = batchTasks.get(taskId);
+  if (!task) return;
+  task.status = 'running';
+  task.updatedAt = Date.now();
 
-          const validFrom = cert.valid_from ? new Date(cert.valid_from) : undefined;
-          const validTo = cert.valid_to ? new Date(cert.valid_to) : undefined;
-          const now = Date.now();
-          const daysRemaining =
-            validTo && Number.isFinite(validTo.getTime())
-              ? Math.floor((validTo.getTime() - now) / (24 * 60 * 60 * 1000))
-              : undefined;
-
-          resolve({
-            ok: true,
-            host,
-            resolvedIps,
-            issuerCn: pickString(cert.issuer?.CN),
-            subjectCn: pickString(cert.subject?.CN),
-            validFrom: validFrom?.toISOString(),
-            validTo: validTo?.toISOString(),
-            daysRemaining,
-            expiresSoon: typeof daysRemaining === 'number' ? daysRemaining <= 30 : undefined,
-          });
-        } catch (e) {
-          resolve({
-            ok: false,
-            host,
-            resolvedIps,
-            error: e instanceof Error ? e.message : 'Certificate parse failed',
-          });
-        }
-      }
-    );
-
-    socket.on('error', (e) => {
-      resolve({
-        ok: false,
-        host,
-        resolvedIps,
-        error: e.message,
-      });
-    });
-    socket.on('timeout', () => {
-      socket.destroy();
-      resolve({
-        ok: false,
-        host,
-        resolvedIps,
-        error: 'TLS connect timeout',
-      });
-    });
-  });
+  try {
+    for (const domain of task.domains) {
+      const result = await probeOneDomain(domain, task.nodeIds, task.ipWhitelist);
+      task.results.push(result);
+      task.completed.push(result.domain);
+      task.remaining = task.remaining.filter((d) => normalizeHost(d) !== result.domain);
+      task.progress = Math.floor((task.completed.length / task.domains.length) * 100);
+      task.updatedAt = Date.now();
+    }
+    task.status = 'completed';
+    task.progress = 100;
+    task.updatedAt = Date.now();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'unknown_error';
+    const remainingDomain = task.remaining[0] ?? task.domains.find((d) => !task.completed.includes(d));
+    if (remainingDomain) task.errors.push({ domain: remainingDomain, error: msg });
+    task.status = 'failed';
+    task.updatedAt = Date.now();
+  }
 }
 
 function createServer(): McpServer {
@@ -260,40 +143,41 @@ function createServer(): McpServer {
   });
 
   server.registerTool(
-    'boce_probe_summary',
+    'probe_domains_batch_start',
     {
-      description:
-        'Run Boce probe flow for one domain and return compact summary (no raw probe dump).',
+      description: 'Start an HTTP probe batch task and return taskId only.',
       inputSchema: {
-        domain: z.string().min(1).describe('Domain or URL (e.g. www.baidu.com)'),
-        nodeIds: z.string().optional().describe('Comma-separated node IDs (e.g. 31,32)'),
-        ipWhitelist: z.array(z.string()).optional().describe('Optional expected response IP list'),
+        domains: z.array(z.string().min(1)).min(1).max(20),
+        nodeIds: z.string().optional(),
+        ipWhitelist: z.array(z.string()).optional(),
+        pollInterval: z.number().int().min(1000).max(60000).optional(),
       },
     },
-    async ({ domain, nodeIds, ipWhitelist }) => {
-      const host = normalizeHost(domain);
-      const result = await detectOnce({ url: host, nodeIds, ipWhitelist });
-      const nodeLines = result.probes
-        .filter((p) => (p.statusCode ?? 0) < 200 || (p.statusCode ?? 0) >= 300 || !!p.boceError)
-        .slice(0, 12)
-        .map((p) => toNodeLine(p));
-      const compactText = formatProbeSummaryText({
-        domain: host,
-        requestId: result.requestId,
-        taskId: result.taskId,
-        overallStatus: result.summary.overallStatus,
-        summary: result.summary.message,
-        availabilityRate: Number(result.availability.global.availabilityRate.toFixed(4)),
-        totalProbes: result.availability.global.total,
-        successProbes: result.availability.global.success,
-        anomalyCount: result.anomalies.length,
-        nodeLines,
-      });
+    async ({ domains, nodeIds, ipWhitelist, pollInterval }) => {
+      const normalized = domains.map(normalizeHost);
+      const taskId = randomUUID();
+      const task: BatchTask = {
+        taskId,
+        status: 'pending',
+        domains: normalized,
+        nodeIds,
+        ipWhitelist,
+        pollInterval: pollInterval ?? DEFAULT_POLL_INTERVAL_MS,
+        completed: [],
+        remaining: [...normalized],
+        results: [],
+        errors: [],
+        progress: 0,
+        updatedAt: Date.now(),
+      };
+      batchTasks.set(taskId, task);
+      void runBatchTask(taskId);
+
       return {
         content: [
           {
             type: 'text' as const,
-            text: compactText,
+            text: JSON.stringify({ taskId }),
           },
         ],
       };
@@ -301,22 +185,30 @@ function createServer(): McpServer {
   );
 
   server.registerTool(
-    'certificate_summary',
+    'probe_domains_batch_status',
     {
-      description:
-        'Check DNS + TLS certificate for one domain and return minimal certificate health summary.',
+      description: 'Get batch probe task progress and next polling step hint.',
       inputSchema: {
-        domain: z.string().min(1).describe('Domain or URL (e.g. www.baidu.com)'),
+        taskId: z.string().min(1),
       },
     },
-    async ({ domain }) => {
-      const host = normalizeHost(domain);
-      const cert = await runCertCheck(host);
+    async ({ taskId }) => {
+      const task = batchTasks.get(taskId);
+      if (!task) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({ taskId, status: 'not_found' }),
+            },
+          ],
+        };
+      }
       return {
         content: [
           {
             type: 'text' as const,
-            text: formatCertSummaryText(cert),
+            text: JSON.stringify(statusPayload(task)),
           },
         ],
       };
@@ -324,122 +216,60 @@ function createServer(): McpServer {
   );
 
   server.registerTool(
-    'investigate_domain',
+    'probe_domains_batch_result',
     {
-      description:
-        'Run Boce probe summary + certificate summary, then return one concise final investigation report.',
+      description: 'Get compact final batch probe report (or polling hint if still running).',
       inputSchema: {
-        domain: z.string().min(1).describe('Domain or URL (e.g. www.baidu.com)'),
-        nodeIds: z.string().optional().describe('Comma-separated node IDs (e.g. 31,32)'),
-        ipWhitelist: z.array(z.string()).optional().describe('Optional expected response IP list'),
+        taskId: z.string().min(1),
       },
     },
-    async ({ domain, nodeIds, ipWhitelist }) => {
-      const summary = await investigateOneDomain({ domain, nodeIds, ipWhitelist });
-
-      const report = [
-        `domain: ${summary.host}`,
-        `final_status: ${summary.finalStatus}`,
-        `flags: ${summary.flags.length ? summary.flags.join(', ') : '-'}`,
-        `probe_status: ${summary.probeStatus}`,
-        `probe_summary: ${summary.probeSummary}`,
-        `availability_rate: ${summary.availabilityRate}`,
-        `probes: ${summary.successProbes}/${summary.totalProbes}`,
-        `anomaly_count: ${summary.anomalyCount}`,
-        `request_id: ${summary.requestId}`,
-        `task_id: ${summary.taskId}`,
-        `certificate_ok: ${summary.certificateOk}`,
-        `subject_cn: ${summary.subjectCn ?? '-'}`,
-        `issuer_cn: ${summary.issuerCn ?? '-'}`,
-        `valid_to: ${summary.validTo ?? '-'}`,
-        `days_remaining: ${summary.daysRemaining ?? '-'}`,
-        `expires_soon: ${summary.expiresSoon ?? '-'}`,
-        `cert_error: ${summary.certError ?? '-'}`,
-      ];
-
-      if (summary.nodeLines.length > 0) {
-        report.push('nodes_compact:');
-        summary.nodeLines.forEach((line, i) => report.push(`${i + 1}. ${line}`));
+    async ({ taskId }) => {
+      const task = batchTasks.get(taskId);
+      if (!task) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({ taskId, status: 'not_found' }),
+            },
+          ],
+        };
       }
 
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: report.join('\n'),
-          },
-        ],
-      };
-    }
-  );
-
-  server.registerTool(
-    'investigate_domains_batch',
-    {
-      description:
-        'Investigate one or more domains in one call with compact per-domain verdict lines and summary counts.',
-      inputSchema: {
-        domains: z
-          .array(z.string().min(1))
-          .min(1)
-          .max(20)
-          .describe('One or more domains/URLs to investigate (max 20 per call)'),
-        nodeIds: z.string().optional().describe('Comma-separated node IDs (e.g. 31,32)'),
-        ipWhitelist: z.array(z.string()).optional().describe('Optional expected response IP list'),
-        concurrency: z
-          .number()
-          .int()
-          .min(1)
-          .max(5)
-          .optional()
-          .describe('Parallelism for checks (1-5, default 3)'),
-      },
-    },
-    async ({ domains, nodeIds, ipWhitelist, concurrency }) => {
-      const maxWorkers = concurrency ?? 3;
-      const queue = [...domains];
-      const rows: string[] = [];
-      let healthyCount = 0;
-      let attentionCount = 0;
-      let failedCount = 0;
-
-      async function worker(): Promise<void> {
-        while (queue.length > 0) {
-          const domain = queue.shift();
-          if (!domain) return;
-          try {
-            const item = await investigateOneDomain({ domain, nodeIds, ipWhitelist });
-            if (item.finalStatus === 'HEALTHY') healthyCount += 1;
-            else attentionCount += 1;
-            const leadFlag = item.flags[0] ?? '-';
-            rows.push(
-              `${item.host} / ${item.finalStatus} / avail ${item.availabilityRate} / cert ${item.certificateOk} / flag ${leadFlag}`
-            );
-          } catch (e) {
-            failedCount += 1;
-            const host = domain.trim() || domain;
-            const msg = e instanceof Error ? e.message : 'unknown_error';
-            rows.push(`${host} / ERROR / avail - / cert - / flag ${msg}`);
-          }
-        }
+      if (task.status === 'pending' || task.status === 'running') {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(statusPayload(task)),
+            },
+          ],
+        };
       }
 
-      await Promise.all(Array.from({ length: Math.min(maxWorkers, domains.length) }, () => worker()));
-
-      const text = [
-        `batch_total: ${domains.length}`,
-        `healthy_count: ${healthyCount}`,
-        `attention_required_count: ${attentionCount}`,
-        `failed_count: ${failedCount}`,
-        'domains_compact:',
-        ...rows.map((line, i) => `${i + 1}. ${line}`),
-      ].join('\n');
+      const healthyCount = task.results.filter((r) => r.finalStatus === 'HEALTHY').length;
+      const attentionCount = task.results.filter((r) => r.finalStatus === 'ATTENTION_REQUIRED').length;
+      const lines = task.results.map((r) =>
+        `${r.domain} / ${r.finalStatus} / avail ${r.availabilityRate} / flag ${r.flag}${r.nodeCompact ? ` / ${r.nodeCompact}` : ''}`
+      );
 
       return {
         content: [
           {
             type: 'text' as const,
-            text,
+            text: JSON.stringify({
+              taskId: task.taskId,
+              status: task.status,
+              progress: task.progress,
+              batchTotal: task.domains.length,
+              healthyCount,
+              attentionRequiredCount: attentionCount,
+              failedCount: task.errors.length,
+              completed: task.completed,
+              remaining: task.remaining,
+              domainsCompact: lines,
+              errors: task.errors,
+            }),
           },
         ],
       };
@@ -544,4 +374,3 @@ main().catch((e) => {
   console.error('Fatal MCP server error:', e);
   process.exit(1);
 });
-

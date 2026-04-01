@@ -140,20 +140,17 @@ This project includes an MCP server for agent-first domain investigation.
   - `npm run mcp:dev` (Stream HTTP, dev)
   - `npm run mcp:start:stdio` (stdio, local debug)
 
-### MCP tools (compact outputs, context-safe)
+### MCP tools (async batch workflow)
 
-- `certificate_summary`
-  - Input: `{ "domain": "www.baidu.com" }`
-  - Output: compact certificate health fields (`certificate_ok`, `issuer_cn`, `valid_to`, etc.)
-- `boce_probe_summary`
-  - Input: `{ "domain": "www.baidu.com", "nodeIds": "31,32", "ipWhitelist": ["1.2.3.4"] }`
-  - Output: compact probe verdict + optional compressed node lines
-- `investigate_domain`
-  - Input: same as `boce_probe_summary`
-  - Output: final compact report combining probe + certificate
-- `investigate_domains_batch`
-  - Input: `{ "domains": ["www.baidu.com", "www.qq.com"], "nodeIds": "31,32", "concurrency": 3 }`
-  - Output: compact batch counts + one compressed verdict line per domain
+- `probe_domains_batch_start`
+  - Input: `{ "domains": ["www.baidu.com", "www.qq.com"], "nodeIds": "31,32" }`
+  - Output: `{ "taskId": "abc123" }`
+- `probe_domains_batch_status`
+  - Input: `{ "taskId": "abc123" }`
+  - Output (running): `status`, `progress`, `completed`, `remaining`, and `nextStep.schedule.delayMs`
+- `probe_domains_batch_result`
+  - Input: `{ "taskId": "abc123" }`
+  - Output: final compact domain lines; while running it returns same polling shape as status
 
 All MCP responses are intentionally compressed to avoid context overflow while preserving final judgment.
 
@@ -197,18 +194,26 @@ npm run mcp:client
 ```text
 connect http://localhost:3010/mcp
 list-tools
-check www.baidu.com 31,32
+check-batch www.baidu.com,www.qq.com 31,32
+# copy taskId from response, then:
+status <taskId>
+result <taskId>
 ```
 
 Expected:
-- `list-tools` shows the 4 MCP tools
-- `check` returns compact text report (`final_status`, `availability_rate`, `certificate_ok`, optional `nodes_compact`)
+- `list-tools` shows the 3 batch tools above
+- `status` returns a polling hint shape:
+  - `status`, `progress`, `completed`, `remaining`
+  - `nextStep.action = "call_tool"`
+  - `nextStep.tool = "probe_domains_batch_status"`
+  - `nextStep.schedule.delayMs = 10000` (default)
+- `result` returns final compact report when task completes
 
 ### Quick MCP test prompts (in Cursor chat)
 
-- `Call MCP tool certificate_summary with {"domain":"www.baidu.com"} and print raw output only.`
-- `Call MCP tool investigate_domain with {"domain":"www.baidu.com","nodeIds":"31,32"} and print raw output only.`
-- `Call MCP tool investigate_domains_batch with {"domains":["www.baidu.com","www.qq.com"],"nodeIds":"31,32"} and print raw output only.`
+- `Call MCP tool probe_domains_batch_start with {"domains":["www.baidu.com","www.qq.com"],"nodeIds":"31,32"} and print raw output only.`
+- `Call MCP tool probe_domains_batch_status with {"taskId":"<taskId>"} and print raw output only.`
+- `Call MCP tool probe_domains_batch_result with {"taskId":"<taskId>"} and print raw output only.`
 
 Summary below. Base URL: `http://localhost:3000`.
 

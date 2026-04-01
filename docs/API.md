@@ -59,133 +59,97 @@ npm run mcp:client
 ```text
 connect http://localhost:3010/mcp
 list-tools
-check www.baidu.com 31,32
-cert www.qq.com
 check-batch www.baidu.com,www.qq.com 31,32
+# copy taskId from output, then:
+status <taskId>
+result <taskId>
 ```
 
 Expected:
 - tools are listed successfully
-- commands return compact text output (not verbose nested JSON)
+- status contains `nextStep.schedule.delayMs` for controlled polling
+- result returns compact final output when completed
 
 ### MCP tools
 
-#### 1) `certificate_summary`
+#### 1) `probe_domains_batch_start`
 
-Checks DNS + TLS certificate for one domain.
-
-**Input schema (summary):**
-
-- `domain` (string, required)
-
-**Example call:**
-
-```text
-Call MCP tool certificate_summary with {"domain":"www.baidu.com"} and print raw output only.
-```
-
-**Output shape (compact text):**
-
-- `domain`
-- `certificate_ok`
-- `subject_cn`
-- `issuer_cn`
-- `valid_to`
-- `days_remaining`
-- `expires_soon`
-- `resolved_ips`
-- `error`
-
-#### 2) `boce_probe_summary`
-
-Runs Boce probe flow for one domain with compact output.
-
-**Input schema (summary):**
-
-- `domain` (string, required)
-- `nodeIds` (string, optional; example `31,32`)
-- `ipWhitelist` (string[], optional)
-
-**Example call:**
-
-```text
-Call MCP tool boce_probe_summary with {"domain":"www.baidu.com","nodeIds":"31,32"} and print raw output only.
-```
-
-**Output shape (compact text):**
-
-- `domain`
-- `final_status`
-- `summary`
-- `availability_rate`
-- `probes`
-- `anomaly_count`
-- `request_id`
-- `task_id`
-- optional `nodes_compact` lines (compressed details)
-
-#### 3) `investigate_domain`
-
-Runs probe summary + certificate summary and returns one concise final report.
-
-**Input schema (summary):**
-
-- `domain` (string, required)
-- `nodeIds` (string, optional)
-- `ipWhitelist` (string[], optional)
-
-**Example call:**
-
-```text
-Call MCP tool investigate_domain with {"domain":"www.baidu.com","nodeIds":"31,32"} and print raw output only.
-```
-
-**Output shape (compact text):**
-
-- `domain`
-- `final_status`
-- `flags`
-- `probe_status`
-- `probe_summary`
-- `availability_rate`
-- `probes`
-- `anomaly_count`
-- `request_id`
-- `task_id`
-- `certificate_ok`
-- `subject_cn`
-- `issuer_cn`
-- `valid_to`
-- `days_remaining`
-- `expires_soon`
-- `cert_error`
-- optional `nodes_compact` lines
-
-#### 4) `investigate_domains_batch`
-
-Investigates one or more domains in one call.
+Starts async HTTP probe batch task.
 
 **Input schema (summary):**
 
 - `domains` (string[], required, 1..20)
 - `nodeIds` (string, optional)
 - `ipWhitelist` (string[], optional)
-- `concurrency` (number, optional, 1..5, default 3)
+- `pollInterval` (number, optional, milliseconds, default `10000`)
 
 **Example call:**
 
 ```text
-Call MCP tool investigate_domains_batch with {"domains":["www.baidu.com","www.qq.com"],"nodeIds":"31,32","concurrency":3} and print raw output only.
+Call MCP tool probe_domains_batch_start with {"domains":["www.baidu.com","www.qq.com"],"nodeIds":"31,32"} and print raw output only.
 ```
 
-**Output shape (compact text):**
+**Output shape:**
 
-- `batch_total`
-- `healthy_count`
-- `attention_required_count`
-- `failed_count`
-- `domains_compact` lines:
-  - `<domain> / <final_status> / avail <rate> / cert <bool> / flag <lead_flag>`
+```json
+{ "taskId": "abc123" }
+```
+
+#### 2) `probe_domains_batch_status`
+
+Returns current progress and next polling hint.
+
+**Input schema (summary):**
+
+- `taskId` (string, required)
+
+**Example output (running):**
+
+```json
+{
+  "taskId": "abc123",
+  "status": "running",
+  "progress": 45,
+  "completed": ["a.com"],
+  "remaining": ["b.com"],
+  "pollInterval": 10000,
+  "nextStep": {
+    "action": "call_tool",
+    "tool": "probe_domains_batch_status",
+    "arguments": { "taskId": "abc123" },
+    "schedule": { "delayMs": 10000 }
+  }
+}
+```
+
+#### 3) `probe_domains_batch_result`
+
+Returns final compact result when completed; while running it returns status + nextStep.
+
+**Input schema (summary):**
+
+- `taskId` (string, required)
+
+**Example output (completed):**
+
+```json
+{
+  "taskId": "abc123",
+  "status": "completed",
+  "progress": 100,
+  "batchTotal": 2,
+  "healthyCount": 1,
+  "attentionRequiredCount": 1,
+  "failedCount": 0,
+  "completed": ["a.com", "b.com"],
+  "remaining": [],
+  "domainsCompact": [
+    "a.com / HEALTHY / avail 1 / flag -",
+    "b.com / ATTENTION_REQUIRED / avail 0.5 / flag probe_status=DEGRADED / Guangdong Telecom / 0.5s / status 200 / 193.2.3.5"
+  ],
+  "errors": []
+}
+```
 
 ### MCP output design note
 

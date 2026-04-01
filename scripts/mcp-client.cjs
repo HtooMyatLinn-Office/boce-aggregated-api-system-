@@ -13,9 +13,10 @@ function printHelp() {
   console.log('  disconnect                Disconnect current session');
   console.log('  list-tools                List available MCP tools');
   console.log('  call-tool <name> <json>   Call a tool with JSON args');
-  console.log('  check <domain> [nodeIds]  Shortcut: investigate_domain');
-  console.log('  check-batch <d1,d2> [nodeIds] Shortcut: investigate_domains_batch');
-  console.log('  cert <domain>             Shortcut: certificate_summary');
+  console.log('  check <domain> [nodeIds]  Start batch for one domain');
+  console.log('  check-batch <d1,d2> [nodeIds] Start batch for multiple domains');
+  console.log('  status <taskId>           Check batch progress');
+  console.log('  result <taskId>           Get final batch result');
   console.log('  raw on|off                Toggle raw JSON output');
   console.log('  clear                     Clear terminal screen');
   console.log('  help                      Show commands');
@@ -92,9 +93,9 @@ async function checkDomain(domain, nodeIds) {
     console.log('Usage: check <domain> [nodeIds]');
     return;
   }
-  const payload = { domain };
+  const payload = { domains: [domain] };
   if (nodeIds) payload.nodeIds = nodeIds;
-  const result = await client.callTool({ name: 'investigate_domain', arguments: payload });
+  const result = await client.callTool({ name: 'probe_domains_batch_start', arguments: payload });
   printToolResult(result);
 }
 
@@ -113,19 +114,25 @@ async function checkBatch(domainsCsv, nodeIds) {
   }
   const payload = { domains };
   if (nodeIds) payload.nodeIds = nodeIds;
-  const result = await client.callTool({ name: 'investigate_domains_batch', arguments: payload });
+  const result = await client.callTool({ name: 'probe_domains_batch_start', arguments: payload });
   printToolResult(result);
 }
 
-async function checkCert(domain) {
-  if (!domain) {
-    console.log('Usage: cert <domain>');
+async function checkStatus(taskId) {
+  if (!taskId) {
+    console.log('Usage: status <taskId>');
     return;
   }
-  const result = await client.callTool({
-    name: 'certificate_summary',
-    arguments: { domain },
-  });
+  const result = await client.callTool({ name: 'probe_domains_batch_status', arguments: { taskId } });
+  printToolResult(result);
+}
+
+async function checkResult(taskId) {
+  if (!taskId) {
+    console.log('Usage: result <taskId>');
+    return;
+  }
+  const result = await client.callTool({ name: 'probe_domains_batch_result', arguments: { taskId } });
   printToolResult(result);
 }
 
@@ -202,8 +209,11 @@ async function main() {
         case 'check-batch':
           await checkBatch(rest[0], rest[1]);
           break;
-        case 'cert':
-          await checkCert(rest[0]);
+        case 'status':
+          await checkStatus(rest[0]);
+          break;
+        case 'result':
+          await checkResult(rest[0]);
           break;
         case 'raw':
           setRawMode(rest[0]);

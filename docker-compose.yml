@@ -19,6 +19,20 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  mcp:
+    build: .
+    ports:
+      - "3010:3010"
+    environment:
+      - NODE_ENV=production
+      - MCP_PORT=3010
+      - BOCE_BASE_URL=${BOCE_BASE_URL:-https://api.boce.com}
+      - BOCE_API_KEY=${BOCE_API_KEY}
+    env_file:
+      - .env
+    command: sh -c "npm run mcp:start"
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     ports:
