@@ -67,15 +67,6 @@ function toNodeLine(node: {
   return `${place} / ${latency} / status ${status} / ${ip}${err}`;
 }
 
-function buildNextStep(taskId: string, delayMs: number): Record<string, unknown> {
-  return {
-    action: 'call_tool',
-    tool: 'probe_domains_batch_status',
-    arguments: { taskId },
-    schedule: { delayMs },
-  };
-}
-
 function statusPayload(task: BatchTask): Record<string, unknown> {
   const base: Record<string, unknown> = {
     taskId: task.taskId,
@@ -86,8 +77,23 @@ function statusPayload(task: BatchTask): Record<string, unknown> {
     pollInterval: task.pollInterval,
   };
   if (task.status === 'pending' || task.status === 'running') {
-    base.nextStep = buildNextStep(task.taskId, task.pollInterval);
+    base.nextStep = {
+      action: 'call_tool',
+      tool: 'probe_domains_batch_status',
+      arguments: { taskId: task.taskId },
+      schedule: { delayMs: task.pollInterval },
+    };
+    return base;
   }
+
+  if (task.status === 'completed') {
+    base.nextStep = {
+      action: 'call_tool',
+      tool: 'probe_domains_batch_result',
+      arguments: { taskId: task.taskId },
+    };
+  }
+
   return base;
 }
 
