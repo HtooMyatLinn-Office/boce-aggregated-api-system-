@@ -147,7 +147,9 @@ This project includes an MCP server for agent-first domain investigation.
   - Output: `{ "taskId": "abc123" }`
 - `probe_domains_batch_status`
   - Input: `{ "taskId": "abc123" }`
-  - Output (running): `status`, `progress`, `completed`, `remaining`, and `nextStep.schedule.delayMs`
+  - Output (running): `status`, `progress` (% of domains **processed**), `completed` (successful probes only), `remaining`, `pollInterval`, and `nextStep.schedule.delayMs`
+  - Output (completed / failed): `pollInterval` omitted; `nextStep` points to `probe_domains_batch_result` (no delay)
+  - Unknown id: `{ "found": false, "error": "TASK_NOT_FOUND" }` (not a batch `status` value)
 - `probe_domains_batch_result`
   - Input: `{ "taskId": "abc123" }`
   - Output: final compact domain lines; while running it returns same polling shape as status
@@ -202,12 +204,9 @@ result <taskId>
 
 Expected:
 - `list-tools` shows the 3 batch tools above
-- `status` returns a polling hint shape:
-  - `status`, `progress`, `completed`, `remaining`
-  - `nextStep.action = "call_tool"`
-  - `nextStep.tool = "probe_domains_batch_status"`
-  - `nextStep.schedule.delayMs = 10000` (default)
-- `result` returns final compact report when task completes
+- While `pending`/`running`, `status` includes `pollInterval` (base) and `nextStep.schedule.delayMs` (adaptive from batch size + remaining work, clamped 2s–60s)
+- When `completed` or `failed`, `pollInterval` is omitted and `nextStep.tool` is `probe_domains_batch_result` (no `schedule`)
+- `result` returns the compact report; `domainErrorCount` counts per-domain probe failures (batch may still be `completed`)
 
 ### Quick MCP test prompts (in Cursor chat)
 

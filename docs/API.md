@@ -67,8 +67,10 @@ result <taskId>
 
 Expected:
 - tools are listed successfully
-- status contains `nextStep.schedule.delayMs` for controlled polling
+- status contains `nextStep.schedule.delayMs` for controlled polling (adaptive from `pollInterval`, batch size, and remaining work; clamped 2s–60s)
 - result returns compact final output when completed
+
+**Field semantics (batch lifecycle):** `status` is always `pending` \| `running` \| `completed` \| `failed`. Unknown `taskId` returns `found: false` and `error: "TASK_NOT_FOUND"` (not a batch `status`). `progress` is **percent of domains processed** (work done), not success rate. `completed` lists **hostnames that finished probing successfully**; domains that threw are only in `errors` / `domainErrorCount`.
 
 ### MCP tools
 
@@ -109,7 +111,7 @@ Returns current progress and next polling hint.
 {
   "taskId": "abc123",
   "status": "running",
-  "progress": 45,
+  "progress": 50,
   "completed": ["a.com"],
   "remaining": ["b.com"],
   "pollInterval": 10000,
@@ -117,9 +119,21 @@ Returns current progress and next polling hint.
     "action": "call_tool",
     "tool": "probe_domains_batch_status",
     "arguments": { "taskId": "abc123" },
-    "schedule": { "delayMs": 10000 }
+    "schedule": { "delayMs": 6663 }
   }
 }
+```
+
+`delayMs` is derived from `pollInterval` (base), batch size, and share of domains still `remaining` (nearing the end, polls tighten). Clamped between 2s and 60s. `pollInterval` is always the client-provided base from `probe_domains_batch_start`.
+
+**Example output (completed — fetch final report next):** `pollInterval` is omitted. `nextStep` points to `probe_domains_batch_result` (no `schedule`).
+
+**Example output (failed — fatal batch error):** same `nextStep` shape as completed: call `probe_domains_batch_result` to read `errors` (includes `batch_runtime` if applicable).
+
+**Unknown task:**
+
+```json
+{ "taskId": "…", "found": false, "error": "TASK_NOT_FOUND" }
 ```
 
 #### 3) `probe_domains_batch_result`
@@ -140,7 +154,7 @@ Returns final compact result when completed; while running it returns status + n
   "batchTotal": 2,
   "healthyCount": 1,
   "attentionRequiredCount": 1,
-  "failedCount": 0,
+  "domainErrorCount": 0,
   "completed": ["a.com", "b.com"],
   "remaining": [],
   "domainsCompact": [

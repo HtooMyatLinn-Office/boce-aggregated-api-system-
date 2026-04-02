@@ -8,6 +8,8 @@ import { z } from 'zod';
 import { detectOnce } from '../services/detection/detect';
 
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
+const ADAPTIVE_POLL_MIN_MS = 2_000;
+const ADAPTIVE_POLL_MAX_MS = 60_000;
 
 type BatchTaskStatus = 'pending' | 'running' | 'completed' | 'failed';
 
@@ -45,6 +47,19 @@ function normalizeHost(input: string): string {
   return parsed.hostname;
 }
 
+/** Same hostname only once per batch; preserves first-seen order. */
+function dedupeNormalizedDomains(hostnames: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const h of hostnames) {
+    if (!seen.has(h)) {
+      seen.add(h);
+      out.push(h);
+    }
+  }
+  return out;
+}
+
 function compactLatency(ms?: number): string {
   if (typeof ms !== 'number' || !Number.isFinite(ms)) return '-';
   return `${(ms / 1000).toFixed(1)}s`;
@@ -67,6 +82,22 @@ function toNodeLine(node: {
   return `${place} / ${latency} / status ${status} / ${ip}${err}`;
 }
 
+/**
+ * Suggested wait before next `probe_domains_batch_status` call.
+ * Larger batches stretch delay slightly; fewer domains remaining tightens it (faster finish detection).
+ * Clamped to [ADAPTIVE_POLL_MIN_MS, ADAPTIVE_POLL_MAX_MS]. `pollInterval` is the base from the client.
+ */
+function computeStatusPollDelayMs(task: BatchTask): number {
+  const base = task.pollInterval;
+  const n = Math.max(1, task.domains.length);
+  const remaining = task.remaining.length;
+  const remainingRatio = remaining / n;
+  const batchWeight = 1 + Math.min(0.4, (n - 1) * 0.025);
+  const urgency = 0.3 + 0.7 * remainingRatio;
+  const raw = base * batchWeight * urgency;
+  return Math.round(Math.min(ADAPTIVE_POLL_MAX_MS, Math.max(ADAPTIVE_POLL_MIN_MS, raw)));
+}
+
 function statusPayload(task: BatchTask): Record<string, unknown> {
   const base: Record<string, unknown> = {
     taskId: task.taskId,
@@ -74,19 +105,30 @@ function statusPayload(task: BatchTask): Record<string, unknown> {
     progress: task.progress,
     completed: task.completed,
     remaining: task.remaining,
-    pollInterval: task.pollInterval,
   };
+
   if (task.status === 'pending' || task.status === 'running') {
+    const delayMs = computeStatusPollDelayMs(task);
+    base.pollInterval = task.pollInterval;
     base.nextStep = {
       action: 'call_tool',
       tool: 'probe_domains_batch_status',
       arguments: { taskId: task.taskId },
-      schedule: { delayMs: task.pollInterval },
+      schedule: { delayMs },
     };
     return base;
   }
 
   if (task.status === 'completed') {
+    base.nextStep = {
+      action: 'call_tool',
+      tool: 'probe_domains_batch_result',
+      arguments: { taskId: task.taskId },
+    };
+    return base;
+  }
+
+  if (task.status === 'failed') {
     base.nextStep = {
       action: 'call_tool',
       tool: 'probe_domains_batch_result',
@@ -133,7 +175,9 @@ async function runBatchTask(taskId: string): Promise<void> {
       }
       // task.domains and task.remaining are already normalized at batch_start.
       task.remaining = task.remaining.filter((d) => d !== domain);
-      task.progress = Math.floor((task.completed.length / task.domains.length) * 100);
+      const processed = task.domains.length - task.remaining.length;
+      task.progress =
+        task.domains.length === 0 ? 100 : Math.floor((processed / task.domains.length) * 100);
       task.updatedAt = Date.now();
     }
     task.status = 'completed';
@@ -157,7 +201,8 @@ function createServer(): McpServer {
   server.registerTool(
     'probe_domains_batch_start',
     {
-      description: 'Start an HTTP probe batch task and return taskId only.',
+      description:
+        'Start an HTTP probe batch task and return taskId only. Duplicate hostnames (after normalization) are deduplicated.',
       inputSchema: {
         domains: z.array(z.string().min(1)).min(1).max(20),
         nodeIds: z.string().optional(),
@@ -166,7 +211,7 @@ function createServer(): McpServer {
       },
     },
     async ({ domains, nodeIds, ipWhitelist, pollInterval }) => {
-      const normalized = domains.map(normalizeHost);
+      const normalized = dedupeNormalizedDomains(domains.map(normalizeHost));
       const taskId = randomUUID();
       const task: BatchTask = {
         taskId,
@@ -199,7 +244,8 @@ function createServer(): McpServer {
   server.registerTool(
     'probe_domains_batch_status',
     {
-      description: 'Get batch probe task progress and next polling step hint.',
+      description:
+        'Batch progress: progress = % of domains processed; completed = hostnames that probed successfully; remaining = not yet processed. nextStep guides poll vs result.',
       inputSchema: {
         taskId: z.string().min(1),
       },
@@ -211,7 +257,7 @@ function createServer(): McpServer {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({ taskId, status: 'not_found' }),
+              text: JSON.stringify({ taskId, found: false, error: 'TASK_NOT_FOUND' }),
             },
           ],
         };
@@ -230,7 +276,8 @@ function createServer(): McpServer {
   server.registerTool(
     'probe_domains_batch_result',
     {
-      description: 'Get compact final batch probe report (or polling hint if still running).',
+      description:
+        'Final compact report when batch is completed or failed. domainErrorCount = per-domain probe exceptions (batch may still be status completed).',
       inputSchema: {
         taskId: z.string().min(1),
       },
@@ -242,7 +289,7 @@ function createServer(): McpServer {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify({ taskId, status: 'not_found' }),
+              text: JSON.stringify({ taskId, found: false, error: 'TASK_NOT_FOUND' }),
             },
           ],
         };
@@ -276,7 +323,7 @@ function createServer(): McpServer {
               batchTotal: task.domains.length,
               healthyCount,
               attentionRequiredCount: attentionCount,
-              failedCount: task.errors.length,
+              domainErrorCount: task.errors.length,
               completed: task.completed,
               remaining: task.remaining,
               domainsCompact: lines,
