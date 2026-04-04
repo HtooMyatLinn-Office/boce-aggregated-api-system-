@@ -352,6 +352,15 @@ async function startHttpServer(): Promise<void> {
   const app = allowedHosts
     ? createMcpExpressApp({ allowedHosts })
     : createMcpExpressApp();
+  if (allowedHosts?.length) {
+    console.error(
+      `[MCP HTTP] Host allow list active (${allowedHosts.length}): ${allowedHosts.join(', ')}`
+    );
+  } else {
+    console.error(
+      '[MCP HTTP] Host allow list: SDK default (localhost, 127.0.0.1, [::1] only). Set MCP_ALLOWED_HOSTS for public Host headers.'
+    );
+  }
   const transports: Record<string, StreamableHTTPServerTransport> = {};
 
   app.post('/mcp', async (req, res) => {
