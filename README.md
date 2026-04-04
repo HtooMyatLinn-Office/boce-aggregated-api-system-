@@ -176,6 +176,7 @@ For remote MCP clients, use Stream HTTP endpoint:
 
 - URL: `http://localhost:3010/mcp`
 - Port can be overridden with `MCP_PORT`
+- Behind a public domain, set **`MCP_ALLOWED_HOSTS`** (hostname only, comma-separated) so the MCP SDK accepts your `Host` header (avoids `Invalid Host` errors).
 
 ### Stream HTTP Quick Test (2 minutes)
 

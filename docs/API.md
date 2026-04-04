@@ -20,6 +20,8 @@ This service also exposes MCP tools for AI-agent workflows.
 - Debug (stdio): `npm run mcp:start:stdio`
 - Stream HTTP endpoint: `http://localhost:3010/mcp` (override via `MCP_PORT`)
 
+**Production / reverse proxy:** The MCP SDK validates the HTTP `Host` header. If you expose MCP on a public domain (e.g. `https://boce-center.example.com/mcp`), set **`MCP_ALLOWED_HOSTS`** to that hostname (comma-separated if several), e.g. `MCP_ALLOWED_HOSTS=boce-center.example.com`. Otherwise requests return JSON-RPC error `Invalid Host: <hostname>`.
+
 ### Cursor setup (stdio debug)
 
 Configure project MCP file `./.cursor/mcp.json`:

@@ -5,6 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { getMcpAllowedHostsForExpress } from '../config';
 import { detectOnce } from '../services/detection/detect';
 
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
@@ -347,7 +348,10 @@ async function startStdioServer(): Promise<void> {
 
 async function startHttpServer(): Promise<void> {
   const mcpPort = Number(process.env.MCP_PORT ?? '3010');
-  const app = createMcpExpressApp();
+  const allowedHosts = getMcpAllowedHostsForExpress();
+  const app = allowedHosts
+    ? createMcpExpressApp({ allowedHosts })
+    : createMcpExpressApp();
   const transports: Record<string, StreamableHTTPServerTransport> = {};
 
   app.post('/mcp', async (req, res) => {

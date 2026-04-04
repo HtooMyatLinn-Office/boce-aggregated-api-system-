@@ -2,6 +2,23 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+/**
+ * Hostnames allowed in HTTP `Host` for MCP Stream HTTP (MCP SDK DNS-rebinding middleware).
+ * When unset, SDK defaults to localhost-only validation — public domains must be listed here.
+ * Comma-separated in env, e.g. MCP_ALLOWED_HOSTS=boce-center.example.com
+ */
+export function getMcpAllowedHostsForExpress(): string[] | undefined {
+  const raw = process.env.MCP_ALLOWED_HOSTS?.trim();
+  if (!raw) return undefined;
+  const fromEnv = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (fromEnv.length === 0) return undefined;
+  const local = ['localhost', '127.0.0.1', '[::1]'];
+  return [...new Set([...local, ...fromEnv])];
+}
+
 export const config = {
   port: parseInt(process.env.PORT ?? '3000', 10),
   nodeEnv: process.env.NODE_ENV ?? 'development',
