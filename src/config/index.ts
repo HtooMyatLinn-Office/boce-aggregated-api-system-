@@ -74,4 +74,9 @@ export const config = {
   admin: {
     token: process.env.ADMIN_TOKEN ?? '',
   },
+  mcp: {
+    authEnabled: (process.env.MCP_AUTH_ENABLED ?? 'false') === 'true',
+    authToken: process.env.MCP_AUTH_TOKEN ?? '',
+    authAllowQueryToken: (process.env.MCP_AUTH_ALLOW_QUERY_TOKEN ?? 'false') === 'true',
+  },
 } as const;

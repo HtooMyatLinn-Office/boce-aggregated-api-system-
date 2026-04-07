@@ -142,6 +142,15 @@ This project includes an MCP server for agent-first domain investigation.
 
 ### MCP tools (async batch workflow)
 
+- `probe_nodes_refresh`
+  - Input: `{}`
+  - Output: refreshed node cache snapshot (updatedAt, mainland/oversea/total counts) + short workflow hint
+- `probe_nodes_list`
+  - **Overflow protection:** default page size is small; each response returns at most **100** nodes even if `limit` is higher (use `offset` + `nextOffset` to page). Prefer `detail: "summary"` for counts only, then `detail: "list"` with `search` / `area` before `probe_domains_batch_start`.
+  - Input (summary): `{ "detail": "summary", "refresh": true }`
+  - Input (paged list): `{ "detail": "list", "area": "oversea", "search": "香港", "limit": 30, "offset": 0 }`
+  - Input (lookup): `{ "nodeId": 31 }`
+  - Output: snapshot + `overflowProtection` metadata; list mode includes `nextOffset` when more rows exist
 - `probe_domains_batch_start`
   - Input: `{ "domains": ["www.baidu.com", "www.qq.com"], "nodeIds": "31,32" }`
   - Output: `{ "taskId": "abc123" }`
@@ -172,11 +181,33 @@ For local Cursor tool-debug via stdio, create `./.cursor/mcp.json`:
 }
 ```
 
+For Cursor remote HTTP MCP with token header from environment:
+
+```json
+{
+  "mcpServers": {
+    "user-boce-investigation": {
+      "url": "http://localhost:3010/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:MCP_AUTH_TOKEN}"
+      }
+    }
+  }
+}
+```
+
 For remote MCP clients, use Stream HTTP endpoint:
 
 - URL: `http://localhost:3010/mcp`
+- **Health / uptime (DevOps):** `GET /mcp/health` returns JSON `200` — use this for load balancers. **`GET /mcp` without a session is not a health check**; the Streamable HTTP spec uses `POST /mcp` (initialize) first, then `GET /mcp` with header **`Mcp-Session-Id`** for the SSE stream. Hitting `GET /mcp` alone will respond with `400` + JSON explaining session is required (this is normal, not a bad deploy).
+- **Multi-instance:** MCP sessions are stored **in memory** per process. If traffic goes to different pods without **sticky sessions**, clients see missing/invalid session — use one MCP replica or session affinity on `/mcp`.
 - Port can be overridden with `MCP_PORT`
 - Behind a public domain, set **`MCP_ALLOWED_HOSTS`** (hostname only, comma-separated) so the MCP SDK accepts your `Host` header (avoids `Invalid Host` errors).
+- Optional token auth (recommended on public deployment):
+  - `MCP_AUTH_ENABLED=true`
+  - `MCP_AUTH_TOKEN=<strong-random-token>`
+  - Clients send `Authorization: Bearer <token>` (or `X-API-Key: <token>`)
+  - For clients that cannot send headers, enable `MCP_AUTH_ALLOW_QUERY_TOKEN=true` and use `?mcp_auth_token=<token>` in MCP URL (less secure; avoid in production when possible)
 
 ### Stream HTTP Quick Test (2 minutes)
 
@@ -197,6 +228,7 @@ npm run mcp:client
 ```text
 connect http://localhost:3010/mcp
 list-tools
+auth-token <your-mcp-token>   # only when MCP_AUTH_ENABLED=true; then reconnect
 check-batch www.baidu.com,www.qq.com 31,32
 # copy taskId from response, then:
 status <taskId>
@@ -204,7 +236,7 @@ result <taskId>
 ```
 
 Expected:
-- `list-tools` shows the 3 batch tools above
+- `list-tools` shows node + batch tools above
 - While `pending`/`running`, `status` includes `pollInterval` (base) and `nextStep.schedule.delayMs` (adaptive from batch size + remaining work, clamped 2s–60s)
 - When `completed` or `failed`, `pollInterval` is omitted and `nextStep.tool` is `probe_domains_batch_result` (no `schedule`)
 - `result` returns the compact report; `domainErrorCount` counts per-domain probe failures (batch may still be `completed`)
@@ -212,6 +244,9 @@ Expected:
 ### Quick MCP test prompts (in Cursor chat)
 
 - `Call MCP tool probe_domains_batch_start with {"domains":["www.baidu.com","www.qq.com"],"nodeIds":"31,32"} and print raw output only.`
+- `Call MCP tool probe_nodes_refresh with {} and print raw output only.`
+- `Call MCP tool probe_nodes_list with {"detail":"summary","refresh":true} and print raw output only.`
+- `Call MCP tool probe_nodes_list with {"detail":"list","area":"oversea","search":"香港","limit":30,"offset":0} and print raw output only.`
 - `Call MCP tool probe_domains_batch_status with {"taskId":"<taskId>"} and print raw output only.`
 - `Call MCP tool probe_domains_batch_result with {"taskId":"<taskId>"} and print raw output only.`
 

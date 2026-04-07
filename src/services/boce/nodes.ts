@@ -88,6 +88,10 @@ class InMemoryNodeCache {
     return this.byId.get(id);
   }
 
+  listNodes(): NodeMeta[] {
+    return Array.from(this.byId.values()).sort((a, b) => a.id - b.id);
+  }
+
   upsertAll(nodes: NodeMeta[], updatedAt: Date): void {
     for (const n of nodes) this.byId.set(n.id, n);
     this.updatedAt = updatedAt;

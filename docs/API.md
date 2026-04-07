@@ -19,8 +19,25 @@ This service also exposes MCP tools for AI-agent workflows.
 - Dev (Stream HTTP): `npm run mcp:dev`
 - Debug (stdio): `npm run mcp:start:stdio`
 - Stream HTTP endpoint: `http://localhost:3010/mcp` (override via `MCP_PORT`)
+- **Health check (no MCP session):** `GET /mcp/health` → `200` JSON. Use this for Cloudflare / k8s / uptime probes.
+- **`GET /mcp` without `Mcp-Session-Id` is not a liveness check.** After `POST /mcp` with JSON-RPC `initialize`, the client receives a session id and must send it on subsequent `GET` (SSE) / `DELETE`. Probing `GET https://your-host/mcp` in a browser returns `400` with `MCP_SESSION_REQUIRED` — expected until a real MCP client completes initialize.
+- **Horizontal scaling:** Sessions live in **process memory**. Multiple replicas without **sticky sessions** cause “invalid / missing session”. Prefer one MCP replica or enable session affinity for `/mcp`.
 
 **Production / reverse proxy:** The MCP SDK validates the HTTP `Host` header. If you expose MCP on a public domain (e.g. `https://boce-center.example.com/mcp`), set **`MCP_ALLOWED_HOSTS`** to that hostname (comma-separated if several), e.g. `MCP_ALLOWED_HOSTS=boce-center.example.com`. Otherwise requests return JSON-RPC error `Invalid Host: <hostname>`.
+
+### MCP authentication (Stream HTTP, optional)
+
+When **`MCP_AUTH_ENABLED=true`** (see `.env.example`):
+
+- Set **`MCP_AUTH_TOKEN`** to a strong secret on the MCP server process.
+- Clients must send either:
+  - `Authorization: Bearer <token>`, or
+  - `X-API-Key: <token>`
+- Optional (not recommended for production): **`MCP_AUTH_ALLOW_QUERY_TOKEN=true`** allows `?mcp_auth_token=<token>` on the MCP URL for clients that cannot set headers.
+
+**Cursor (HTTP MCP):** In `./.cursor/mcp.json`, prefer headers with env interpolation, e.g. `"Authorization": "Bearer ${env:MCP_AUTH_TOKEN}"`, and ensure that variable is set for the Cursor process (restart Cursor after changing OS env).
+
+**Custom CLI:** `npm run mcp:client` → `auth-token <token>` then `connect`.
 
 ### Cursor setup (stdio debug)
 
@@ -61,6 +78,12 @@ npm run mcp:client
 ```text
 connect http://localhost:3010/mcp
 list-tools
+auth-token <token>            # if MCP_AUTH_ENABLED=true
+disconnect
+connect http://localhost:3010/mcp
+call-tool probe_nodes_refresh {}
+call-tool probe_nodes_list {"detail":"summary"}
+call-tool probe_nodes_list {"detail":"list","limit":10,"offset":0}
 check-batch www.baidu.com,www.qq.com 31,32
 # copy taskId from output, then:
 status <taskId>
@@ -76,7 +99,52 @@ Expected:
 
 ### MCP tools
 
-#### 1) `probe_domains_batch_start`
+Recommended agent workflow: **refresh or list nodes → pick `nodeIds` → `probe_domains_batch_start` → status → result**.
+
+#### 1) `probe_nodes_refresh`
+
+Reloads the in-memory node cache from Boce (mainland + oversea).
+
+**Input:** `{}`
+
+**Output (success):** `success`, `snapshot` (`updatedAt`, `mainlandCount`, `overseaCount`, `total`), `workflowHint` (points to bounded `probe_nodes_list` usage before batch start).
+
+**Output (Boce error):** `success: false`, `error`, `errorCode`.
+
+---
+
+#### 2) `probe_nodes_list`
+
+Reads the node cache for choosing `nodeIds` before probing. Designed for **overflow protection**: avoid returning hundreds of nodes in a single tool response.
+
+**Input schema (summary):**
+
+- `refresh` (boolean, optional) — refresh cache from Boce before read
+- `detail` (string, optional) — `"summary"` \| `"list"`; default **`list`**
+- `area` (string, optional) — `"mainland"` \| `"oversea"`
+- `search` (string, optional, max 64) — case-insensitive substring match on `nodeName` and `ispName` (e.g. Hong Kong–oriented probes: `香港`)
+- `limit` (integer, optional, 1..1000) — requested page size; **server clamps to 100 per response** (see `overflowProtection`)
+- `offset` (integer, optional, default `0`) — pagination start index
+- `nodeId` (integer, optional) — if set, returns a **single-node lookup** instead of list/summary (other list fields omitted)
+
+**`detail: "summary"`** — Counts and hints only; **no `nodes` array**. Use first to see cache size and matched filter size without blowing context.
+
+**`detail: "list"`** — Returns a page of compact nodes: `id`, `nodeName`, `ispName`, `area`, `region`. Includes:
+
+- `totalMatched`, `returned`, `truncated`, `nextOffset` (when more pages exist)
+- `overflowProtection`: `defaultListLimit` (30), `maxNodesPerResponse` (100), `requestedLimit`, `appliedLimit`, `clamped`
+
+**Example calls (Cursor chat):**
+
+```text
+Call MCP tool probe_nodes_list with {"detail":"summary","refresh":true} and print raw output only.
+Call MCP tool probe_nodes_list with {"detail":"list","area":"oversea","search":"香港","limit":30,"offset":0} and print raw output only.
+Call MCP tool probe_nodes_list with {"nodeId":31} and print raw output only.
+```
+
+---
+
+#### 3) `probe_domains_batch_start`
 
 Starts async HTTP probe batch task.
 
@@ -99,7 +167,7 @@ Call MCP tool probe_domains_batch_start with {"domains":["www.baidu.com","www.qq
 { "taskId": "abc123" }
 ```
 
-#### 2) `probe_domains_batch_status`
+#### 4) `probe_domains_batch_status`
 
 Returns current progress and next polling hint.
 
@@ -138,7 +206,7 @@ Returns current progress and next polling hint.
 { "taskId": "…", "found": false, "error": "TASK_NOT_FOUND" }
 ```
 
-#### 3) `probe_domains_batch_result`
+#### 5) `probe_domains_batch_result`
 
 Returns final compact result when completed; while running it returns status + nextStep.
 

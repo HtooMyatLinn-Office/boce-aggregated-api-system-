@@ -1,7 +1,10 @@
 {
   "mcpServers": {
     "user-boce-investigation": {
-      "url": "http://localhost:3010/mcp"
+      "url": "http://localhost:3010/mcp",
+      "headers": {
+        "Authorization": "Bearer Auth123$%^"
+      }
     }
   }
 }

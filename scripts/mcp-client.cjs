@@ -6,6 +6,7 @@ let client = null;
 let transport = null;
 let serverUrl = 'http://localhost:3010/mcp';
 let rawOutput = false;
+let authToken = process.env.MCP_AUTH_TOKEN || '';
 
 function printHelp() {
   console.log('Commands:');
@@ -17,6 +18,7 @@ function printHelp() {
   console.log('  check-batch <d1,d2> [nodeIds] Start batch for multiple domains');
   console.log('  status <taskId>           Check batch progress');
   console.log('  result <taskId>           Get final batch result');
+  console.log('  auth-token <token|clear>  Set/clear MCP auth token');
   console.log('  raw on|off                Toggle raw JSON output');
   console.log('  clear                     Clear terminal screen');
   console.log('  help                      Show commands');
@@ -33,10 +35,21 @@ async function connect(url) {
     return;
   }
   if (url) serverUrl = url;
-  client = new Client({ name: 'boce-custom-cli', version: '0.1.0' });
-  transport = new StreamableHTTPClientTransport(new URL(serverUrl));
-  await client.connect(transport);
-  console.log(`Connected: ${serverUrl}`);
+  const nextClient = new Client({ name: 'boce-custom-cli', version: '0.1.0' });
+  const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
+  const nextTransport = new StreamableHTTPClientTransport(new URL(serverUrl), {
+    requestInit: headers ? { headers } : undefined,
+  });
+  try {
+    await nextClient.connect(nextTransport);
+  } catch (e) {
+    // Keep local state clean so users can retry connect directly after auth/token fixes.
+    await nextClient.close().catch(() => undefined);
+    throw e;
+  }
+  client = nextClient;
+  transport = nextTransport;
+  console.log(`Connected: ${serverUrl}${authToken ? ' (auth token set)' : ''}`);
 }
 
 async function disconnect() {
@@ -167,6 +180,20 @@ function setRawMode(value) {
   console.log('Usage: raw on|off');
 }
 
+function setAuthToken(value) {
+  if (!value) {
+    console.log('Usage: auth-token <token|clear>');
+    return;
+  }
+  if (value === 'clear') {
+    authToken = '';
+    console.log('Auth token cleared.');
+    return;
+  }
+  authToken = value;
+  console.log('Auth token set. Reconnect to apply.');
+}
+
 async function main() {
   console.log('Boce MCP Custom Client');
   printHelp();
@@ -217,6 +244,9 @@ async function main() {
           break;
         case 'raw':
           setRawMode(rest[0]);
+          break;
+        case 'auth-token':
+          setAuthToken(rest.join(' '));
           break;
         case 'clear':
           clearScreen();
