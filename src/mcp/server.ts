@@ -26,6 +26,16 @@ type DomainResult = {
   availabilityRate: number;
   flag: string;
   nodeCompact?: string;
+  lineComparisons: Array<{
+    nodeId?: number;
+    nodeName?: string;
+    ispName?: string;
+    region?: string;
+    statusCode?: number;
+    latencyMs?: number;
+    responseIp?: string;
+    boceError?: string;
+  }>;
 };
 
 type BatchTask = {
@@ -109,23 +119,29 @@ function ensureHttpAuth(req: Request, res: Response): boolean {
   return true;
 }
 
-function normalizeHost(input: string): string {
+function normalizeProbeTarget(input: string): string {
   const raw = input.trim();
-  if (!raw) throw new Error('domain is required');
+  if (!raw) throw new Error('url/domain is required');
+  const looksLikeUrl = raw.includes('://') || raw.includes('/') || raw.includes('?');
   const withScheme = raw.includes('://') ? raw : `https://${raw}`;
   const parsed = new URL(withScheme);
   if (!parsed.hostname) throw new Error('invalid domain');
+  // Keep full URL (path/query) for URL-like input; keep host-only style for host input.
+  if (looksLikeUrl) {
+    parsed.hash = '';
+    return parsed.toString();
+  }
   return parsed.hostname;
 }
 
-/** Same hostname only once per batch; preserves first-seen order. */
-function dedupeNormalizedDomains(hostnames: string[]): string[] {
+/** Same normalized target only once per batch; preserves first-seen order. */
+function dedupeNormalizedTargets(targets: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const h of hostnames) {
-    if (!seen.has(h)) {
-      seen.add(h);
-      out.push(h);
+  for (const t of targets) {
+    if (!seen.has(t)) {
+      seen.add(t);
+      out.push(t);
     }
   }
   return out;
@@ -151,6 +167,20 @@ function toNodeLine(node: {
   const ip = node.responseIp ?? '-';
   const err = node.boceError ? ` / err ${node.boceError}` : '';
   return `${place} / ${latency} / status ${status} / ${ip}${err}`;
+}
+
+function toEnglishNodeLabel(nodeName?: string, ispName?: string): string {
+  const nodeMap: Record<string, string> = {
+    广东: 'Guangdong',
+  };
+  const ispMap: Record<string, string> = {
+    移动: 'Mobile',
+    联通: 'Unicom',
+    电信: 'Telecom',
+  };
+  const n = nodeName ? (nodeMap[nodeName] ?? nodeName) : 'Unknown';
+  const i = ispName ? (ispMap[ispName] ?? ispName) : '';
+  return `${n}${i ? ` ${i}` : ''}`.trim();
 }
 
 /**
@@ -210,21 +240,40 @@ function statusPayload(task: BatchTask): Record<string, unknown> {
   return base;
 }
 
-async function probeOneDomain(domain: string, nodeIds?: string, ipWhitelist?: string[]): Promise<DomainResult> {
-  const host = normalizeHost(domain);
-  const probe = await detectOnce({ url: host, nodeIds, ipWhitelist });
+async function probeOneDomain(targetUrl: string, nodeIds?: string, ipWhitelist?: string[]): Promise<DomainResult> {
+  const url = normalizeProbeTarget(targetUrl);
+  const probe = await detectOnce({ url, nodeIds, ipWhitelist });
   const availabilityRate = Number(probe.availability.global.availabilityRate.toFixed(4));
   const isHealthy = probe.summary.overallStatus === 'HEALTHY';
-  const nodeCompact = probe.probes
-    .filter((p) => (p.statusCode ?? 0) < 200 || (p.statusCode ?? 0) >= 300 || !!p.boceError)
-    .slice(0, 1)
-    .map((p) => toNodeLine(p))[0];
+  const anomalyProbe = probe.probes.find(
+    (p) => (p.statusCode ?? 0) < 200 || (p.statusCode ?? 0) >= 300 || !!p.boceError
+  );
+  // Always expose one representative node line (healthy or not) so ops can see status/latency quickly.
+  const representativeProbe = anomalyProbe ?? probe.probes[0];
+  const nodeCompact = representativeProbe ? toNodeLine(representativeProbe) : undefined;
+  const lineComparisons = probe.probes
+    .map((p) => ({
+      nodeId: p.nodeId,
+      nodeName: p.nodeName,
+      ispName: p.ispName,
+      region: p.region,
+      statusCode: p.statusCode,
+      latencyMs: p.latencyMs,
+      responseIp: p.responseIp,
+      boceError: p.boceError || undefined,
+    }))
+    .sort((a, b) => {
+      const ax = typeof a.latencyMs === 'number' ? a.latencyMs : Number.POSITIVE_INFINITY;
+      const bx = typeof b.latencyMs === 'number' ? b.latencyMs : Number.POSITIVE_INFINITY;
+      return ax - bx;
+    });
   return {
-    domain: host,
+    domain: url,
     finalStatus: isHealthy ? 'HEALTHY' : 'ATTENTION_REQUIRED',
     availabilityRate,
     flag: isHealthy ? '-' : `probe_status=${probe.summary.overallStatus}`,
     nodeCompact,
+    lineComparisons,
   };
 }
 
@@ -457,7 +506,7 @@ function createServer(): McpServer {
     'probe_domains_batch_start',
     {
       description:
-        'Start an HTTP probe batch task and return taskId only. Duplicate hostnames (after normalization) are deduplicated.',
+        'Start an HTTP probe batch task and return taskId only. Full URL (path/query) is preserved and probed as-is. Duplicate normalized targets are deduplicated.',
       inputSchema: {
         domains: z.array(z.string().min(1)).min(1).max(20),
         nodeIds: z.string().optional(),
@@ -466,7 +515,7 @@ function createServer(): McpServer {
       },
     },
     async ({ domains, nodeIds, ipWhitelist, pollInterval }) => {
-      const normalized = dedupeNormalizedDomains(domains.map(normalizeHost));
+      const normalized = dedupeNormalizedTargets(domains.map(normalizeProbeTarget));
       const taskId = randomUUID();
       const task: BatchTask = {
         taskId,
@@ -566,6 +615,130 @@ function createServer(): McpServer {
       const lines = task.results.map((r) =>
         `${r.domain} / ${r.finalStatus} / avail ${r.availabilityRate} / flag ${r.flag}${r.nodeCompact ? ` / ${r.nodeCompact}` : ''}`
       );
+      const lineComparisons = task.results
+        .flatMap((r) =>
+          r.lineComparisons.map((x) => ({
+            nodeId: x.nodeId,
+            nodeName: x.nodeName,
+            ispName: x.ispName,
+            url: r.domain,
+            statusCode: x.statusCode,
+            latencyMs: x.latencyMs,
+            responseIp: x.responseIp,
+            error: x.boceError,
+          }))
+        )
+        .sort((a, b) => {
+          const ax = typeof a.latencyMs === 'number' ? a.latencyMs : Number.POSITIVE_INFINITY;
+          const bx = typeof b.latencyMs === 'number' ? b.latencyMs : Number.POSITIVE_INFINITY;
+          return ax - bx;
+        });
+      const lineComparisonSummary = task.results.map((r) => {
+        const isSuccess = (x: { statusCode?: number; boceError?: string }) =>
+          typeof x.statusCode === 'number' && x.statusCode >= 200 && x.statusCode <= 399 && !x.boceError;
+        const successCount = r.lineComparisons.filter(isSuccess).length;
+        const failureCount = r.lineComparisons.length - successCount;
+        const successRate =
+          r.lineComparisons.length === 0 ? 0 : Math.round((successCount / r.lineComparisons.length) * 100);
+
+        // For speed ranking, only use successful responses (avoid mixing failures into performance).
+        const valid = r.lineComparisons.filter(
+          (x) => typeof x.latencyMs === 'number' && isSuccess(x)
+        );
+        if (valid.length === 0) {
+          return {
+            domain: r.domain,
+            sampledLines: r.lineComparisons.length,
+            measurableLines: 0, // measurable successful lines
+            successCount,
+            failureCount,
+            successRate,
+            fastest: null,
+            slowest: null,
+            avgLatencyMs: null,
+            latencySpreadMs: null,
+          };
+        }
+        const sorted = [...valid].sort((a, b) => (a.latencyMs as number) - (b.latencyMs as number));
+        const fastest = sorted[0];
+        const slowest = sorted[sorted.length - 1];
+        const sum = sorted.reduce((acc, x) => acc + (x.latencyMs as number), 0);
+        const avgLatencyMs = Math.round((sum / sorted.length) * 100) / 100;
+        return {
+          domain: r.domain,
+          sampledLines: r.lineComparisons.length,
+          measurableLines: sorted.length,
+          successCount,
+          failureCount,
+          successRate,
+          fastest: {
+            nodeId: fastest.nodeId,
+            nodeName: fastest.nodeName,
+            ispName: fastest.ispName,
+            latencyMs: fastest.latencyMs,
+            statusCode: fastest.statusCode,
+            responseIp: fastest.responseIp,
+          },
+          slowest: {
+            nodeId: slowest.nodeId,
+            nodeName: slowest.nodeName,
+            ispName: slowest.ispName,
+            latencyMs: slowest.latencyMs,
+            statusCode: slowest.statusCode,
+            responseIp: slowest.responseIp,
+          },
+          avgLatencyMs,
+          latencySpreadMs: (slowest.latencyMs as number) - (fastest.latencyMs as number),
+        };
+      });
+      const compactComparisons = task.results.map((r) => {
+        const groups = new Map<
+          string,
+          {
+            displayName: string;
+            latencyValues: number[];
+            statusCode?: number;
+            responseIp?: string;
+          }
+        >();
+        for (const item of r.lineComparisons) {
+          const displayName = toEnglishNodeLabel(item.nodeName, item.ispName);
+          const key = `${item.nodeName ?? ''}|${item.ispName ?? ''}`;
+          if (!groups.has(key)) {
+            groups.set(key, {
+              displayName,
+              latencyValues: [],
+              statusCode: item.statusCode,
+              responseIp: item.responseIp,
+            });
+          }
+          const g = groups.get(key)!;
+          if (typeof item.latencyMs === 'number') g.latencyValues.push(item.latencyMs);
+          // Latest seen representative values for status/ip.
+          if (typeof item.statusCode === 'number') g.statusCode = item.statusCode;
+          if (item.responseIp) g.responseIp = item.responseIp;
+        }
+        const lines = Array.from(groups.values())
+          .map((g) => {
+            const avgMs =
+              g.latencyValues.length > 0
+                ? g.latencyValues.reduce((a, b) => a + b, 0) / g.latencyValues.length
+                : NaN;
+            const avgSec = Number.isFinite(avgMs) ? (avgMs / 1000).toFixed(2) : '-';
+            const status = typeof g.statusCode === 'number' ? g.statusCode : '-';
+            const ip = g.responseIp ?? '-';
+            return {
+              sortLatency: Number.isFinite(avgMs) ? avgMs : Number.POSITIVE_INFINITY,
+              text: `${g.displayName} / ${avgSec}s / status ${status} / ${ip}`,
+            };
+          })
+          .sort((a, b) => a.sortLatency - b.sortLatency)
+          .map((x) => x.text);
+        return {
+          domain: r.domain,
+          lines,
+        };
+      });
 
       return {
         content: [
@@ -574,15 +747,7 @@ function createServer(): McpServer {
             text: JSON.stringify({
               taskId: task.taskId,
               status: task.status,
-              progress: task.progress,
-              batchTotal: task.domains.length,
-              healthyCount,
-              attentionRequiredCount: attentionCount,
-              domainErrorCount: task.errors.length,
-              completed: task.completed,
-              remaining: task.remaining,
-              domainsCompact: lines,
-              errors: task.errors,
+              compactComparisons,
             }),
           },
         ],

@@ -161,9 +161,16 @@ This project includes an MCP server for agent-first domain investigation.
   - Unknown id: `{ "found": false, "error": "TASK_NOT_FOUND" }` (not a batch `status` value)
 - `probe_domains_batch_result`
   - Input: `{ "taskId": "abc123" }`
-  - Output: final compact domain lines; while running it returns same polling shape as status
+  - Output (completed/failed): minimal MCP payload `{ taskId, status, compactComparisons }`
+    - `compactComparisons` shape:
+      - `domain`: full URL target
+      - `lines`: compact comparable strings, e.g. `Guangdong Mobile / 0.21s / status 200 / 162.209.175.250`
+    - line grouping: `nodeName + ispName`
+    - latency: average per line group, converted to seconds with 2 decimals
+    - line ordering: latency ascending
+  - Output (pending/running): returns the same polling shape as `probe_domains_batch_status`
 
-All MCP responses are intentionally compressed to avoid context overflow while preserving final judgment.
+All MCP responses are intentionally compressed to avoid context overflow and keep MCP output directly comparable.
 
 ### Cursor MCP config (project-level)
 

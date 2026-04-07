@@ -208,7 +208,7 @@ Returns current progress and next polling hint.
 
 #### 5) `probe_domains_batch_result`
 
-Returns final compact result when completed; while running it returns status + nextStep.
+Returns final **minimal MCP comparison payload** when completed/failed; while running it returns status + nextStep.
 
 **Input schema (summary):**
 
@@ -220,24 +220,30 @@ Returns final compact result when completed; while running it returns status + n
 {
   "taskId": "abc123",
   "status": "completed",
-  "progress": 100,
-  "batchTotal": 2,
-  "healthyCount": 1,
-  "attentionRequiredCount": 1,
-  "domainErrorCount": 0,
-  "completed": ["a.com", "b.com"],
-  "remaining": [],
-  "domainsCompact": [
-    "a.com / HEALTHY / avail 1 / flag -",
-    "b.com / ATTENTION_REQUIRED / avail 0.5 / flag probe_status=DEGRADED / Guangdong Telecom / 0.5s / status 200 / 193.2.3.5"
-  ],
-  "errors": []
+  "compactComparisons": [
+    {
+      "domain": "https://example.com/play",
+      "lines": [
+        "Guangdong Mobile / 0.21s / status 200 / 162.209.175.250",
+        "Guangdong Unicom / 0.29s / status 200 / 192.151.192.11",
+        "Guangdong Telecom / 0.44s / status 200 / 172.247.18.166"
+      ]
+    }
+  ]
 }
 ```
 
+`compactComparisons` rules:
+
+- Group by `domain` (full URL target).
+- Within a domain, group probe rows by line key (`nodeName + ispName`).
+- Latency per line is averaged (`avg(latencyMs)`), converted to seconds with 2 decimals.
+- Status code / response IP are representative latest values for the line group.
+- Output lines are sorted by latency ascending for direct side-by-side comparison.
+
 ### MCP output design note
 
-MCP responses are intentionally compressed to prevent context overflow while preserving final judgment.
+MCP responses are intentionally compressed to prevent context overflow and keep MCP output directly comparable.
 
 ---
 
