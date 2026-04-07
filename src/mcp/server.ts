@@ -631,9 +631,6 @@ async function startHttpServer(): Promise<void> {
     res.status(200).json({
       ok: true,
       service: 'boce-mcp',
-      transport: 'Streamable HTTP',
-      mcpPostInitialize: 'POST /mcp with JSON-RPC initialize (see MCP client SDK)',
-      note: 'GET /mcp without a session is expected to fail; use this path for health checks.',
     });
   });
 
