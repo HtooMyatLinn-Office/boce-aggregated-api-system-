@@ -101,6 +101,57 @@ Expected:
 
 Recommended agent workflow: **refresh or list nodes → pick `nodeIds` → `probe_domains_batch_start` → status → result**.
 
+#### MCP resource: `boce://nodes/list`
+
+Queryable node-discovery resource optimized for LLM usage.
+
+**Query parameters (all optional):**
+
+- `query` (string): ranked keyword search, e.g. `gd mobile`
+- `region` (string): region filter, e.g. `Guangdong`
+- `isp` (string): ISP filter, e.g. `Mobile` / `Unicom` / `Telecom`
+- `limit` (number): max returned rows (default `20`)
+- `offset` (number): pagination offset (default `0`)
+
+Examples:
+
+```text
+read-resource boce://nodes/list
+read-resource boce://nodes/list?query=gd%20mobile
+read-resource boce://nodes/list?region=Guangdong&isp=Mobile
+read-resource boce://nodes/list?limit=5&offset=5
+```
+
+**Response shape:**
+
+```json
+{
+  "version": "1.0",
+  "updatedAt": "2026-04-07T03:00:00.000Z",
+  "snapshot": { "mainlandCount": 120, "overseaCount": 80, "total": 200 },
+  "total": 42,
+  "limit": 5,
+  "offset": 5,
+  "nodes": [
+    {
+      "nodeId": 19,
+      "region": "Guangdong",
+      "ispName": "Mobile",
+      "label": "Guangdong Mobile (nodeId: 19)",
+      "score": 18
+    }
+  ]
+}
+```
+
+Notes:
+
+- No params returns the first page (default limit 20), not the full list.
+- Query/region/isp values are safely decoded (`gd%20mobile` and `gd mobile` behave the same).
+- Filtering + pagination run in-memory on cached nodes.
+
+---
+
 #### 1) `probe_nodes_refresh`
 
 Reloads the in-memory node cache from Boce (mainland + oversea).
@@ -122,7 +173,8 @@ Reads the node cache for choosing `nodeIds` before probing. Designed for **overf
 - `refresh` (boolean, optional) — refresh cache from Boce before read
 - `detail` (string, optional) — `"summary"` \| `"list"`; default **`list`**
 - `area` (string, optional) — `"mainland"` \| `"oversea"`
-- `search` (string, optional, max 64) — case-insensitive substring match on `nodeName` and `ispName` (e.g. Hong Kong–oriented probes: `香港`)
+- `query` (string, optional, max 64) — ranked keyword search
+- `search` (string, optional, max 64) — backward-compatible alias for `query`
 - `limit` (integer, optional, 1..1000) — requested page size; **server clamps to 100 per response** (see `overflowProtection`)
 - `offset` (integer, optional, default `0`) — pagination start index
 - `nodeId` (integer, optional) — if set, returns a **single-node lookup** instead of list/summary (other list fields omitted)
@@ -138,7 +190,7 @@ Reads the node cache for choosing `nodeIds` before probing. Designed for **overf
 
 ```text
 Call MCP tool probe_nodes_list with {"detail":"summary","refresh":true} and print raw output only.
-Call MCP tool probe_nodes_list with {"detail":"list","area":"oversea","search":"香港","limit":30,"offset":0} and print raw output only.
+Call MCP tool probe_nodes_list with {"detail":"list","area":"oversea","query":"gd mobile","limit":30,"offset":0} and print raw output only.
 Call MCP tool probe_nodes_list with {"nodeId":31} and print raw output only.
 ```
 
@@ -164,7 +216,7 @@ Call MCP tool probe_domains_batch_start with {"domains":["www.baidu.com","www.qq
 **Output shape:**
 
 ```json
-{ "taskId": "abc123" }
+{ "taskId": "abc123", "status": "pending", "stage": "QUEUED", "warnings": [] }
 ```
 
 #### 4) `probe_domains_batch_status`
@@ -220,6 +272,8 @@ Returns final **minimal MCP comparison payload** when completed/failed; while ru
 {
   "taskId": "abc123",
   "status": "completed",
+  "stage": "COMPLETED",
+  "warnings": [],
   "compactComparisons": [
     {
       "domain": "https://example.com/play",

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
@@ -17,8 +17,10 @@ const ADAPTIVE_POLL_MAX_MS = 60_000;
 /** MCP node list: small default + hard per-response cap to avoid context overflow (hundreds of nodes). */
 const MCP_NODE_LIST_DEFAULT_LIMIT = 30;
 const MCP_NODE_LIST_MAX_PER_RESPONSE = 100;
+const MCP_NODE_RESOURCE_DEFAULT_LIMIT = 20;
 
 type BatchTaskStatus = 'pending' | 'running' | 'completed' | 'failed';
+type BatchTaskStage = 'QUEUED' | 'CONNECTING' | 'PROBING' | 'COMPLETED' | 'TIMEOUT';
 
 type DomainResult = {
   domain: string;
@@ -41,6 +43,7 @@ type DomainResult = {
 type BatchTask = {
   taskId: string;
   status: BatchTaskStatus;
+  stage: BatchTaskStage;
   domains: string[];
   nodeIds?: string;
   ipWhitelist?: string[];
@@ -51,6 +54,7 @@ type BatchTask = {
   errors: { domain: string; error: string }[];
   progress: number;
   updatedAt: number;
+  warnings: string[];
 };
 
 const batchTasks = new Map<string, BatchTask>();
@@ -183,6 +187,110 @@ function toEnglishNodeLabel(nodeName?: string, ispName?: string): string {
   return `${n}${i ? ` ${i}` : ''}`.trim();
 }
 
+function toEnglishRegion(nodeName?: string): string {
+  const nodeMap: Record<string, string> = {
+    广东: 'Guangdong',
+  };
+  if (!nodeName) return 'Unknown';
+  return nodeMap[nodeName] ?? nodeName;
+}
+
+function toEnglishIsp(ispName?: string): string {
+  const ispMap: Record<string, string> = {
+    移动: 'Mobile',
+    联通: 'Unicom',
+    电信: 'Telecom',
+  };
+  if (!ispName) return 'Unknown';
+  return ispMap[ispName] ?? ispName;
+}
+
+function toNodeSelectionLabel(nodeId: number, nodeName?: string, ispName?: string): string {
+  return `${toEnglishNodeLabel(nodeName, ispName)} (nodeId: ${nodeId})`;
+}
+
+function tokenizeSearchText(input: string): string[] {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
+    .split(/\s+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function expandSearchToken(token: string): string[] {
+  const aliasMap: Record<string, string[]> = {
+    gd: ['guangdong', '广东'],
+    guangdong: ['gd', '广东'],
+    mobile: ['移动', 'yd'],
+    yd: ['mobile', '移动'],
+    unicom: ['联通', 'lt'],
+    lt: ['unicom', '联通'],
+    telecom: ['电信', 'dx'],
+    dx: ['telecom', '电信'],
+  };
+  return [token, ...(aliasMap[token] ?? [])];
+}
+
+function scoreNodeForQuery(
+  query: string,
+  node: { id: number; nodeName: string; ispName: string; region: string; area: string }
+): number {
+  const queryTokens = tokenizeSearchText(query);
+  if (queryTokens.length === 0) return 0;
+
+  const region = toEnglishRegion(node.nodeName).toLowerCase();
+  const isp = toEnglishIsp(node.ispName).toLowerCase();
+  const label = toNodeSelectionLabel(node.id, node.nodeName, node.ispName).toLowerCase();
+  const haystack = `${node.nodeName} ${node.ispName} ${region} ${isp} ${node.region} ${node.area} ${node.id} ${label}`.toLowerCase();
+  const candidateTokens = new Set(tokenizeSearchText(haystack));
+
+  let score = 0;
+  let coveredTokens = 0;
+  for (const qt of queryTokens) {
+    const expanded = expandSearchToken(qt);
+    let matched = false;
+    for (const token of expanded) {
+      if (candidateTokens.has(token)) {
+        score += 6;
+        matched = true;
+        break;
+      }
+      if (region.startsWith(token) || isp.startsWith(token)) {
+        score += 4;
+        matched = true;
+        break;
+      }
+      if (haystack.includes(token)) {
+        score += 2;
+        matched = true;
+        break;
+      }
+    }
+    if (matched) coveredTokens += 1;
+  }
+  if (coveredTokens === queryTokens.length) score += 10;
+  if (haystack.includes(query.toLowerCase())) score += 4;
+  return score;
+}
+
+function parsePositiveIntOrDefault(input: string | undefined, fallback: number): number {
+  if (!input) return fallback;
+  const n = Number.parseInt(input, 10);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return n;
+}
+
+function safeDecodeQueryValue(input: string | undefined): string {
+  const raw = (input ?? '').trim();
+  if (!raw) return '';
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 /**
  * Suggested wait before next `probe_domains_batch_status` call.
  * Larger batches stretch delay slightly; fewer domains remaining tightens it (faster finish detection).
@@ -203,9 +311,11 @@ function statusPayload(task: BatchTask): Record<string, unknown> {
   const base: Record<string, unknown> = {
     taskId: task.taskId,
     status: task.status,
+    stage: task.stage,
     progress: task.progress,
     completed: task.completed,
     remaining: task.remaining,
+    warnings: task.warnings,
   };
 
   if (task.status === 'pending' || task.status === 'running') {
@@ -281,16 +391,22 @@ async function runBatchTask(taskId: string): Promise<void> {
   const task = batchTasks.get(taskId);
   if (!task) return;
   task.status = 'running';
+  task.stage = 'CONNECTING';
   task.updatedAt = Date.now();
 
   try {
+    let sawTimeout = false;
     for (const domain of task.domains) {
+      task.stage = 'PROBING';
       try {
         const result = await probeOneDomain(domain, task.nodeIds, task.ipWhitelist);
         task.results.push(result);
         task.completed.push(result.domain);
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'unknown_error';
+        if (msg.toLowerCase().includes('timeout') || msg.toLowerCase().includes('did not complete within')) {
+          sawTimeout = true;
+        }
         task.errors.push({ domain, error: msg });
       }
       // task.domains and task.remaining are already normalized at batch_start.
@@ -300,14 +416,21 @@ async function runBatchTask(taskId: string): Promise<void> {
         task.domains.length === 0 ? 100 : Math.floor((processed / task.domains.length) * 100);
       task.updatedAt = Date.now();
     }
-    task.status = 'completed';
     task.progress = 100;
+    if (task.completed.length === 0 && sawTimeout) {
+      task.status = 'failed';
+      task.stage = 'TIMEOUT';
+    } else {
+      task.status = 'completed';
+      task.stage = 'COMPLETED';
+    }
     task.updatedAt = Date.now();
   } catch (e) {
     // Fatal safeguard: unexpected loop-level error.
     const msg = e instanceof Error ? e.message : 'unknown_error';
     task.errors.push({ domain: 'batch_runtime', error: msg });
     task.status = 'failed';
+    task.stage = msg.toLowerCase().includes('timeout') ? 'TIMEOUT' : 'COMPLETED';
     task.updatedAt = Date.now();
   }
 }
@@ -317,6 +440,122 @@ function createServer(): McpServer {
     name: 'boce-aggregated-investigation',
     version: '0.1.0',
   });
+
+  const buildNodesResource = (uri: URL) => {
+      const query = safeDecodeQueryValue(uri.searchParams.get('query') ?? undefined);
+      const regionFilter = safeDecodeQueryValue(uri.searchParams.get('region') ?? undefined).toLowerCase();
+      const ispFilter = safeDecodeQueryValue(uri.searchParams.get('isp') ?? undefined).toLowerCase();
+      const offset = Math.max(0, parsePositiveIntOrDefault(uri.searchParams.get('offset') ?? undefined, 0));
+      const requestedLimit = parsePositiveIntOrDefault(
+        uri.searchParams.get('limit') ?? undefined,
+        MCP_NODE_RESOURCE_DEFAULT_LIMIT
+      );
+      const limit = Math.min(
+        MCP_NODE_LIST_MAX_PER_RESPONSE,
+        Math.max(1, requestedLimit || MCP_NODE_RESOURCE_DEFAULT_LIMIT)
+      );
+
+      const snapshot = nodeCache.snapshot();
+      let rows: Array<{
+        id: number;
+        region: string;
+        ispName: string;
+        nodeName: string;
+        rawIspName: string;
+        area: string;
+        regionCode: string;
+        score?: number;
+      }> = nodeCache.listNodes().map((n) => ({
+        id: n.id,
+        region: toEnglishRegion(n.nodeName),
+        ispName: toEnglishIsp(n.ispName),
+        nodeName: n.nodeName,
+        rawIspName: n.ispName,
+        area: n.area,
+        regionCode: n.region,
+      }));
+
+      if (query) {
+        rows = rows
+          .map((n) => ({
+            ...n,
+            score: scoreNodeForQuery(query, {
+              id: n.id,
+              nodeName: n.nodeName,
+              ispName: n.rawIspName,
+              area: n.area,
+              region: n.regionCode,
+            }),
+          }))
+          .filter((n) => (n.score ?? 0) > 0)
+          .sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || a.id - b.id);
+      }
+
+      if (regionFilter) {
+        rows = rows.filter((n) => n.region.toLowerCase().includes(regionFilter));
+      }
+      if (ispFilter) {
+        rows = rows.filter((n) => n.ispName.toLowerCase().includes(ispFilter));
+      }
+
+      const total = rows.length;
+      const page = rows.slice(offset, offset + limit);
+      const nodes = page.map((n) => ({
+        nodeId: n.id,
+        region: n.region,
+        ispName: n.ispName,
+        label: toNodeSelectionLabel(n.id, n.nodeName, n.rawIspName),
+        score: query ? n.score : undefined,
+      }));
+      return {
+        contents: [
+          {
+            uri: uri.toString(),
+            text: JSON.stringify(
+              {
+                version: '1.0',
+                updatedAt: snapshot.updatedAt ?? null,
+                snapshot: {
+                  mainlandCount: snapshot.mainlandCount,
+                  overseaCount: snapshot.overseaCount,
+                  total: snapshot.total,
+                },
+                total,
+                limit,
+                offset,
+                nodes,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+  };
+
+  server.registerResource(
+    'probe-nodes',
+    'boce://nodes/list',
+    {
+      title: 'Boce Probe Nodes',
+      description:
+        'Cached probe nodes with optional query/region/isp filtering and pagination for LLM clients.',
+      mimeType: 'application/json',
+    },
+    async (uri) => buildNodesResource(uri)
+  );
+
+  server.registerResource(
+    'probe-nodes-query',
+    new ResourceTemplate('boce://nodes/list{+suffix}', { list: undefined }),
+    {
+      title: 'Boce Probe Nodes Query',
+      description:
+        'Queryable boce://nodes/list resource. Supports query, region, isp, limit, offset.',
+      mimeType: 'application/json',
+    },
+    async (uri) => buildNodesResource(uri)
+  );
 
   server.registerTool(
     'probe_nodes_refresh',
@@ -371,12 +610,13 @@ function createServer(): McpServer {
         detail: z.enum(['summary', 'list']).optional(),
         area: z.enum(['mainland', 'oversea']).optional(),
         nodeId: z.number().int().positive().optional(),
+        query: z.string().max(64).optional(),
         search: z.string().max(64).optional(),
         limit: z.number().int().min(1).max(1000).optional(),
         offset: z.number().int().min(0).max(50_000).optional(),
       },
     },
-    async ({ refresh, detail, area, nodeId, search, limit, offset }) => {
+    async ({ refresh, detail, area, nodeId, query, search, limit, offset }) => {
       try {
         if (refresh) await refreshNodeCache();
       } catch (e) {
@@ -408,6 +648,9 @@ function createServer(): McpServer {
                 success: !!node,
                 snapshot,
                 node: node ?? null,
+                selectedLabel: node
+                  ? toNodeSelectionLabel(node.id, node.nodeName, node.ispName)
+                  : undefined,
                 error: node ? undefined : 'NODE_NOT_FOUND_IN_CACHE',
                 hint: node ? undefined : 'Call with {"refresh": true} and try again.',
                 overflowProtection: {
@@ -423,13 +666,13 @@ function createServer(): McpServer {
       const allRows = nodeCache.listNodes();
       let rows = allRows;
       if (area) rows = rows.filter((n) => n.area === area);
-      const q = search?.trim();
+      const q = (query ?? search)?.trim();
       if (q) {
-        const lower = q.toLowerCase();
-        rows = rows.filter(
-          (n) =>
-            n.nodeName.toLowerCase().includes(lower) || n.ispName.toLowerCase().includes(lower)
-        );
+        rows = rows
+          .map((n) => ({ row: n, score: scoreNodeForQuery(q, n) }))
+          .filter((x) => x.score > 0)
+          .sort((a, b) => b.score - a.score || a.row.id - b.row.id)
+          .map((x) => x.row);
       }
 
       const requestedLimit = limit ?? MCP_NODE_LIST_DEFAULT_LIMIT;
@@ -468,10 +711,15 @@ function createServer(): McpServer {
       const page = rows.slice(start, start + appliedLimit);
       const compact = page.map((n) => ({
         id: n.id,
+        nodeId: n.id,
         nodeName: n.nodeName,
         ispName: n.ispName,
+        regionLabel: toEnglishRegion(n.nodeName),
+        ispLabel: toEnglishIsp(n.ispName),
+        label: toNodeSelectionLabel(n.id, n.nodeName, n.ispName),
         area: n.area,
         region: n.region,
+        score: q ? scoreNodeForQuery(q, n) : undefined,
       }));
       const hasMore = start + appliedLimit < rows.length;
       return {
@@ -511,25 +759,36 @@ function createServer(): McpServer {
         domains: z.array(z.string().min(1)).min(1).max(20),
         nodeIds: z.string().optional(),
         ipWhitelist: z.array(z.string()).optional(),
-        pollInterval: z.number().int().min(1000).max(60000).optional(),
+        pollInterval: z.number().int().optional(),
       },
     },
     async ({ domains, nodeIds, ipWhitelist, pollInterval }) => {
+      const warnings: string[] = [];
+      let effectivePollInterval = pollInterval ?? DEFAULT_POLL_INTERVAL_MS;
+      if (effectivePollInterval < 1000) {
+        effectivePollInterval = 1000;
+        warnings.push('pollInterval adjusted to minimum 1000ms');
+      } else if (effectivePollInterval > 60_000) {
+        effectivePollInterval = 60_000;
+        warnings.push('pollInterval adjusted to maximum 60000ms');
+      }
       const normalized = dedupeNormalizedTargets(domains.map(normalizeProbeTarget));
       const taskId = randomUUID();
       const task: BatchTask = {
         taskId,
         status: 'pending',
+        stage: 'QUEUED',
         domains: normalized,
         nodeIds,
         ipWhitelist,
-        pollInterval: pollInterval ?? DEFAULT_POLL_INTERVAL_MS,
+        pollInterval: effectivePollInterval,
         completed: [],
         remaining: [...normalized],
         results: [],
         errors: [],
         progress: 0,
         updatedAt: Date.now(),
+        warnings,
       };
       batchTasks.set(taskId, task);
       void runBatchTask(taskId);
@@ -538,7 +797,13 @@ function createServer(): McpServer {
         content: [
           {
             type: 'text' as const,
-            text: JSON.stringify({ taskId }),
+            text: JSON.stringify({
+              taskId,
+              status: task.status,
+              stage: task.stage,
+              normalizedInput: { pollInterval: effectivePollInterval },
+              warnings,
+            }),
           },
         ],
       };
@@ -747,6 +1012,8 @@ function createServer(): McpServer {
             text: JSON.stringify({
               taskId: task.taskId,
               status: task.status,
+              stage: task.stage,
+              warnings: task.warnings,
               compactComparisons,
             }),
           },

@@ -13,6 +13,7 @@ function printHelp() {
   console.log('  connect [url]             Connect to MCP Stream HTTP server');
   console.log('  disconnect                Disconnect current session');
   console.log('  list-tools                List available MCP tools');
+  console.log('  read-resource <uri>       Read an MCP resource by URI');
   console.log('  call-tool <name> <json>   Call a tool with JSON args');
   console.log('  check <domain> [nodeIds]  Start batch for one domain');
   console.log('  check-batch <d1,d2> [nodeIds] Start batch for multiple domains');
@@ -99,6 +100,31 @@ async function callTool(name, argsRaw) {
   }
   const result = await client.callTool({ name, arguments: args });
   printToolResult(result);
+}
+
+async function readResource(uri) {
+  if (!client) {
+    console.log('Not connected. Run: connect');
+    return;
+  }
+  if (!uri) {
+    console.log('Usage: read-resource <uri>');
+    return;
+  }
+  const result = await client.readResource({ uri });
+  if (rawOutput) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  const chunks = result?.contents ?? [];
+  const textParts = chunks
+    .filter((item) => typeof item?.text === 'string')
+    .map((item) => item.text);
+  if (textParts.length > 0) {
+    console.log(textParts.join('\n'));
+    return;
+  }
+  console.log(JSON.stringify(result, null, 2));
 }
 
 async function checkDomain(domain, nodeIds) {
@@ -223,6 +249,9 @@ async function main() {
           break;
         case 'list-tools':
           await listTools();
+          break;
+        case 'read-resource':
+          await readResource(rest[0]);
           break;
         case 'call-tool': {
           const toolName = rest[0];

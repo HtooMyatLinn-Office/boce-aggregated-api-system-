@@ -142,21 +142,33 @@ This project includes an MCP server for agent-first domain investigation.
 
 ### MCP tools (async batch workflow)
 
+- `boce://nodes/list` (MCP Resource)
+  - Primary node-discovery path for LLM clients (avoids repeated node-list tool calls)
+  - Supports query params: `query`, `region`, `isp`, `limit` (default 20), `offset` (default 0)
+  - Payload includes `total`, `limit`, `offset`, and `nodes[]` with `nodeId`, `region`, `ispName`, `label`, optional `score`
+  - Query decoding is client-agnostic (handles `gd mobile` and `gd%20mobile` consistently)
+  - Uses in-memory cache only (no upstream fetch per resource read)
 - `probe_nodes_refresh`
   - Input: `{}`
   - Output: refreshed node cache snapshot (updatedAt, mainland/oversea/total counts) + short workflow hint
 - `probe_nodes_list`
   - **Overflow protection:** default page size is small; each response returns at most **100** nodes even if `limit` is higher (use `offset` + `nextOffset` to page). Prefer `detail: "summary"` for counts only, then `detail: "list"` with `search` / `area` before `probe_domains_batch_start`.
   - Input (summary): `{ "detail": "summary", "refresh": true }`
-  - Input (paged list): `{ "detail": "list", "area": "oversea", "search": "香港", "limit": 30, "offset": 0 }`
+  - Input (paged list): `{ "detail": "list", "area": "oversea", "query": "gd mobile", "limit": 30, "offset": 0 }`
+  - Search supports ranked keyword matching (`query` preferred, `search` backward-compatible)
   - Input (lookup): `{ "nodeId": 31 }`
-  - Output: snapshot + `overflowProtection` metadata; list mode includes `nextOffset` when more rows exist
+  - Output: snapshot + `overflowProtection` metadata + user-friendly `label`; list mode includes `nextOffset` when more rows exist
 - `probe_domains_batch_start`
   - Input: `{ "domains": ["www.baidu.com", "www.qq.com"], "nodeIds": "31,32" }`
-  - Output: `{ "taskId": "abc123" }`
+  - Input (`pollInterval`) is user-friendly:
+    - `<1000` auto-adjusts to `1000` with warning
+    - `>60000` auto-adjusts to `60000` with warning
+  - Output: `{ "taskId": "abc123", "status": "pending", "stage": "QUEUED", "warnings": [] }`
 - `probe_domains_batch_status`
   - Input: `{ "taskId": "abc123" }`
-  - Output (running): `status`, `progress` (% of domains **processed**), `completed` (successful probes only), `remaining`, `pollInterval`, and `nextStep.schedule.delayMs`
+  - Output adds explicit lifecycle stage:
+    - `QUEUED`, `CONNECTING`, `PROBING`, `COMPLETED`, `TIMEOUT`
+  - Output (running): `status`, `stage`, `progress` (% of domains **processed**), `completed` (successful probes only), `remaining`, `pollInterval`, and `nextStep.schedule.delayMs`
   - Output (completed / failed): `pollInterval` omitted; `nextStep` points to `probe_domains_batch_result` (no delay)
   - Unknown id: `{ "found": false, "error": "TASK_NOT_FOUND" }` (not a batch `status` value)
 - `probe_domains_batch_result`
