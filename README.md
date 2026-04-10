@@ -144,18 +144,16 @@ This project includes an MCP server for agent-first domain investigation.
 
 - `boce://nodes/list` (MCP Resource)
   - Primary node-discovery path for LLM clients (avoids repeated node-list tool calls)
-  - Supports query params: `query`, `region`, `isp`, `limit` (default 20), `offset` (default 0)
+  - Supports query params: `query`, `region`, `isp`, `force_refresh`, `limit` (default 20), `offset` (default 0)
   - Payload includes `total`, `limit`, `offset`, and `nodes[]` with `nodeId`, `region`, `ispName`, `label`, optional `score`
   - Query decoding is client-agnostic (handles `gd mobile` and `gd%20mobile` consistently)
   - Uses in-memory cache only (no upstream fetch per resource read)
-- `probe_nodes_refresh`
-  - Input: `{}`
-  - Output: refreshed node cache snapshot (updatedAt, mainland/oversea/total counts) + short workflow hint
 - `probe_nodes_list`
-  - **Overflow protection:** default page size is small; each response returns at most **100** nodes even if `limit` is higher (use `offset` + `nextOffset` to page). Prefer `detail: "summary"` for counts only, then `detail: "list"` with `search` / `area` before `probe_domains_batch_start`.
-  - Input (summary): `{ "detail": "summary", "refresh": true }`
-  - Input (paged list): `{ "detail": "list", "area": "oversea", "query": "gd mobile", "limit": 30, "offset": 0 }`
-  - Search supports ranked keyword matching (`query` preferred, `search` backward-compatible)
+  - **Overflow protection:** default page size is small; each response returns at most **100** nodes even if `limit` is higher (use `offset` + `nextOffset` to page).
+  - Input (summary): `{ "detail": "summary", "force_refresh": true }`
+  - Input (paged list): `{ "detail": "list", "region": "Guangdong", "isp": "Unicom", "query": "gd unicom", "limit": 30, "offset": 0 }`
+  - Search supports ranked keyword matching (`query` preferred, `search` backward-compatible) with full-text boost for direct phrase matches (e.g. `广东联通`)
+  - Structured filters (`region`, `isp`) are applied before ranking
   - Input (lookup): `{ "nodeId": 31 }`
   - Output: snapshot + `overflowProtection` metadata + user-friendly `label`; list mode includes `nextOffset` when more rows exist
 - `probe_domains_batch_start`
@@ -263,9 +261,10 @@ Expected:
 ### Quick MCP test prompts (in Cursor chat)
 
 - `Call MCP tool probe_domains_batch_start with {"domains":["www.baidu.com","www.qq.com"],"nodeIds":"31,32"} and print raw output only.`
-- `Call MCP tool probe_nodes_refresh with {} and print raw output only.`
-- `Call MCP tool probe_nodes_list with {"detail":"summary","refresh":true} and print raw output only.`
-- `Call MCP tool probe_nodes_list with {"detail":"list","area":"oversea","search":"香港","limit":30,"offset":0} and print raw output only.`
+- `Read MCP resource boce://nodes/list?query=gd%20mobile&limit=10&offset=0 and print raw output only.`
+- `Read MCP resource boce://nodes/list?region=Guangdong&isp=Unicom&limit=10&offset=0 and print raw output only.`
+- `Call MCP tool probe_nodes_list with {"detail":"summary","force_refresh":true} and print raw output only.`
+- `Call MCP tool probe_nodes_list with {"detail":"list","region":"Guangdong","isp":"Unicom","query":"广东联通","limit":30,"offset":0} and print raw output only.`
 - `Call MCP tool probe_domains_batch_status with {"taskId":"<taskId>"} and print raw output only.`
 - `Call MCP tool probe_domains_batch_result with {"taskId":"<taskId>"} and print raw output only.`
 

@@ -218,6 +218,10 @@ function tokenizeSearchText(input: string): string[] {
     .filter(Boolean);
 }
 
+function normalizeSearchString(input: string): string {
+  return input.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, '');
+}
+
 function expandSearchToken(token: string): string[] {
   const aliasMap: Record<string, string[]> = {
     gd: ['guangdong', '广东'],
@@ -232,6 +236,47 @@ function expandSearchToken(token: string): string[] {
   return [token, ...(aliasMap[token] ?? [])];
 }
 
+function normalizeIspFilterToken(input: string): string {
+  return input.trim().toLowerCase();
+}
+
+function expandIspFilterAliases(input: string): string[] {
+  const key = normalizeIspFilterToken(input);
+  const aliasMap: Record<string, string[]> = {
+    unicom: ['联通', 'lt', 'unicom'],
+    lt: ['联通', 'unicom', 'lt'],
+    联通: ['unicom', 'lt', '联通'],
+    mobile: ['移动', 'yd', 'mobile'],
+    yd: ['移动', 'mobile', 'yd'],
+    移动: ['mobile', 'yd', '移动'],
+    telecom: ['电信', 'dx', 'telecom'],
+    dx: ['电信', 'telecom', 'dx'],
+    电信: ['telecom', 'dx', '电信'],
+  };
+  return [...new Set([key, ...(aliasMap[key] ?? [])])];
+}
+
+function matchesRegionFilter(
+  node: { nodeName: string; region: string },
+  regionFilter: string
+): boolean {
+  if (!regionFilter) return true;
+  const f = regionFilter.toLowerCase();
+  const regionEn = toEnglishRegion(node.nodeName).toLowerCase();
+  return node.nodeName.toLowerCase().includes(f) || regionEn.includes(f) || node.region.toLowerCase().includes(f);
+}
+
+function matchesIspFilter(
+  node: { ispName: string; rawIspName?: string },
+  ispFilter: string
+): boolean {
+  if (!ispFilter) return true;
+  const aliases = expandIspFilterAliases(ispFilter);
+  const ispEn = toEnglishIsp(node.ispName).toLowerCase();
+  const ispRaw = (node.rawIspName ?? node.ispName).toLowerCase();
+  return aliases.some((a) => ispEn.includes(a) || ispRaw.includes(a));
+}
+
 function scoreNodeForQuery(
   query: string,
   node: { id: number; nodeName: string; ispName: string; region: string; area: string }
@@ -243,7 +288,14 @@ function scoreNodeForQuery(
   const isp = toEnglishIsp(node.ispName).toLowerCase();
   const label = toNodeSelectionLabel(node.id, node.nodeName, node.ispName).toLowerCase();
   const haystack = `${node.nodeName} ${node.ispName} ${region} ${isp} ${node.region} ${node.area} ${node.id} ${label}`.toLowerCase();
+  const normalizedNodeText = normalizeSearchString(haystack);
+  const normalizedFullQuery = normalizeSearchString(query);
   const candidateTokens = new Set(tokenizeSearchText(haystack));
+
+  // Full-text match gets dominant score for direct phrase queries (e.g., "广东联通").
+  const hasFullTextMatch =
+    normalizedFullQuery.length > 0 && normalizedNodeText.includes(normalizedFullQuery);
+  const fullTextBoost = hasFullTextMatch ? 10_000 : 0;
 
   let score = 0;
   let coveredTokens = 0;
@@ -271,7 +323,7 @@ function scoreNodeForQuery(
   }
   if (coveredTokens === queryTokens.length) score += 10;
   if (haystack.includes(query.toLowerCase())) score += 4;
-  return score;
+  return fullTextBoost + score;
 }
 
 function parsePositiveIntOrDefault(input: string | undefined, fallback: number): number {
@@ -441,10 +493,13 @@ function createServer(): McpServer {
     version: '0.1.0',
   });
 
-  const buildNodesResource = (uri: URL) => {
+  const buildNodesResource = async (uri: URL) => {
       const query = safeDecodeQueryValue(uri.searchParams.get('query') ?? undefined);
       const regionFilter = safeDecodeQueryValue(uri.searchParams.get('region') ?? undefined).toLowerCase();
       const ispFilter = safeDecodeQueryValue(uri.searchParams.get('isp') ?? undefined).toLowerCase();
+      const forceRefresh = ['1', 'true', 'yes', 'y'].includes(
+        (uri.searchParams.get('force_refresh') ?? '').trim().toLowerCase()
+      );
       const offset = Math.max(0, parsePositiveIntOrDefault(uri.searchParams.get('offset') ?? undefined, 0));
       const requestedLimit = parsePositiveIntOrDefault(
         uri.searchParams.get('limit') ?? undefined,
@@ -455,6 +510,9 @@ function createServer(): McpServer {
         Math.max(1, requestedLimit || MCP_NODE_RESOURCE_DEFAULT_LIMIT)
       );
 
+      if (forceRefresh) {
+        await refreshNodeCache();
+      }
       const snapshot = nodeCache.snapshot();
       let rows: Array<{
         id: number;
@@ -475,6 +533,13 @@ function createServer(): McpServer {
         regionCode: n.region,
       }));
 
+      // Apply explicit filters before scoring.
+      rows = rows.filter(
+        (n) =>
+          matchesRegionFilter({ nodeName: n.nodeName, region: n.regionCode }, regionFilter) &&
+          matchesIspFilter({ ispName: n.ispName, rawIspName: n.rawIspName }, ispFilter)
+      );
+
       if (query) {
         rows = rows
           .map((n) => ({
@@ -491,20 +556,15 @@ function createServer(): McpServer {
           .sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || a.id - b.id);
       }
 
-      if (regionFilter) {
-        rows = rows.filter((n) => n.region.toLowerCase().includes(regionFilter));
-      }
-      if (ispFilter) {
-        rows = rows.filter((n) => n.ispName.toLowerCase().includes(ispFilter));
-      }
-
       const total = rows.length;
       const page = rows.slice(offset, offset + limit);
       const nodes = page.map((n) => ({
         nodeId: n.id,
+        nodeName: n.region,
         region: n.region,
         ispName: n.ispName,
         label: toNodeSelectionLabel(n.id, n.nodeName, n.rawIspName),
+        displayLabel: `${n.region} ${n.ispName} / ${toNodeSelectionLabel(n.id, n.nodeName, n.rawIspName)}`,
         score: query ? n.score : undefined,
       }));
       return {
@@ -523,6 +583,12 @@ function createServer(): McpServer {
                 total,
                 limit,
                 offset,
+                filters: {
+                  query: query || null,
+                  region: regionFilter || null,
+                  isp: ispFilter || null,
+                  force_refresh: forceRefresh,
+                },
                 nodes,
               },
               null,
@@ -558,57 +624,16 @@ function createServer(): McpServer {
   );
 
   server.registerTool(
-    'probe_nodes_refresh',
-    {
-      description:
-        'Refresh Boce node cache from upstream (mainland + oversea) and return snapshot counts.',
-      inputSchema: {},
-    },
-    async () => {
-      try {
-        const snapshot = await refreshNodeCache();
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: JSON.stringify({
-                success: true,
-                snapshot,
-                workflowHint:
-                  'Use probe_nodes_list with detail=summary or small detail=list+limit+search before probe_domains_batch_start; responses are capped per call to avoid hundreds of nodes in one message.',
-              }),
-            },
-          ],
-        };
-      } catch (e) {
-        if (e instanceof BoceApiError) {
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: JSON.stringify({
-                  success: false,
-                  error: e.message,
-                  errorCode: e.errorCode,
-                }),
-              },
-            ],
-          };
-        }
-        throw e;
-      }
-    }
-  );
-
-  server.registerTool(
     'probe_nodes_list',
     {
       description:
-        'List Boce probe nodes from cache (refresh optional). Use detail=summary first for counts only; use list+limit+offset+search to avoid returning hundreds of nodes in one response. Workflow: list/summary -> pick nodeIds -> probe_domains_batch_start. For HK-focused probes, try search (e.g. 香港) or area=oversea.',
+        'List Boce probe nodes from cache. Supports query/region/isp filters, optional force_refresh, and pagination. Use summary first for counts; use list with filters to choose nodeIds before probe_domains_batch_start.',
       inputSchema: {
-        refresh: z.boolean().optional(),
+        force_refresh: z.boolean().optional(),
         detail: z.enum(['summary', 'list']).optional(),
         area: z.enum(['mainland', 'oversea']).optional(),
+        region: z.string().max(64).optional(),
+        isp: z.string().max(64).optional(),
         nodeId: z.number().int().positive().optional(),
         query: z.string().max(64).optional(),
         search: z.string().max(64).optional(),
@@ -616,9 +641,9 @@ function createServer(): McpServer {
         offset: z.number().int().min(0).max(50_000).optional(),
       },
     },
-    async ({ refresh, detail, area, nodeId, query, search, limit, offset }) => {
+    async ({ force_refresh, detail, area, region, isp, nodeId, query, search, limit, offset }) => {
       try {
-        if (refresh) await refreshNodeCache();
+        if (force_refresh) await refreshNodeCache();
       } catch (e) {
         if (e instanceof BoceApiError) {
           return {
@@ -666,6 +691,8 @@ function createServer(): McpServer {
       const allRows = nodeCache.listNodes();
       let rows = allRows;
       if (area) rows = rows.filter((n) => n.area === area);
+      if (region) rows = rows.filter((n) => matchesRegionFilter(n, region));
+      if (isp) rows = rows.filter((n) => matchesIspFilter(n, isp));
       const q = (query ?? search)?.trim();
       if (q) {
         rows = rows
@@ -688,7 +715,13 @@ function createServer(): McpServer {
                 success: true,
                 detail: 'summary',
                 snapshot,
-                filter: { area: area ?? null, search: q ?? null },
+                filter: {
+                  area: area ?? null,
+                  region: region ?? null,
+                  isp: isp ?? null,
+                  search: q ?? null,
+                  force_refresh: force_refresh ?? false,
+                },
                 totals: {
                   mainlandCount: snapshot.mainlandCount,
                   overseaCount: snapshot.overseaCount,
@@ -730,7 +763,14 @@ function createServer(): McpServer {
               success: true,
               detail: 'list',
               snapshot,
-              filter: { area: area ?? null, search: q ?? null, offset: start },
+              filter: {
+                area: area ?? null,
+                region: region ?? null,
+                isp: isp ?? null,
+                search: q ?? null,
+                force_refresh: force_refresh ?? false,
+                offset: start,
+              },
               totalMatched: rows.length,
               returned: compact.length,
               truncated: hasMore,

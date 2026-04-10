@@ -81,8 +81,7 @@ list-tools
 auth-token <token>            # if MCP_AUTH_ENABLED=true
 disconnect
 connect http://localhost:3010/mcp
-call-tool probe_nodes_refresh {}
-call-tool probe_nodes_list {"detail":"summary"}
+call-tool probe_nodes_list {"detail":"summary","force_refresh":true}
 call-tool probe_nodes_list {"detail":"list","limit":10,"offset":0}
 check-batch www.baidu.com,www.qq.com 31,32
 # copy taskId from output, then:
@@ -99,7 +98,7 @@ Expected:
 
 ### MCP tools
 
-Recommended agent workflow: **refresh or list nodes → pick `nodeIds` → `probe_domains_batch_start` → status → result**.
+Recommended agent workflow: **list nodes (optionally `force_refresh`) → pick `nodeIds` → `probe_domains_batch_start` → status → result**.
 
 #### MCP resource: `boce://nodes/list`
 
@@ -110,6 +109,7 @@ Queryable node-discovery resource optimized for LLM usage.
 - `query` (string): ranked keyword search, e.g. `gd mobile`
 - `region` (string): region filter, e.g. `Guangdong`
 - `isp` (string): ISP filter, e.g. `Mobile` / `Unicom` / `Telecom`
+- `force_refresh` (boolean): refresh node cache before serving this request
 - `limit` (number): max returned rows (default `20`)
 - `offset` (number): pagination offset (default `0`)
 
@@ -119,6 +119,7 @@ Examples:
 read-resource boce://nodes/list
 read-resource boce://nodes/list?query=gd%20mobile
 read-resource boce://nodes/list?region=Guangdong&isp=Mobile
+read-resource boce://nodes/list?query=%E5%B9%BF%E4%B8%9C%E8%81%94%E9%80%9A&force_refresh=true
 read-resource boce://nodes/list?limit=5&offset=5
 ```
 
@@ -148,31 +149,22 @@ Notes:
 
 - No params returns the first page (default limit 20), not the full list.
 - Query/region/isp values are safely decoded (`gd%20mobile` and `gd mobile` behave the same).
+- Full-text query matches are strongly boosted (e.g. `广东联通` ranks Guangdong Unicom nodes at top when present).
 - Filtering + pagination run in-memory on cached nodes.
 
 ---
 
-#### 1) `probe_nodes_refresh`
-
-Reloads the in-memory node cache from Boce (mainland + oversea).
-
-**Input:** `{}`
-
-**Output (success):** `success`, `snapshot` (`updatedAt`, `mainlandCount`, `overseaCount`, `total`), `workflowHint` (points to bounded `probe_nodes_list` usage before batch start).
-
-**Output (Boce error):** `success: false`, `error`, `errorCode`.
-
----
-
-#### 2) `probe_nodes_list`
+#### 1) `probe_nodes_list`
 
 Reads the node cache for choosing `nodeIds` before probing. Designed for **overflow protection**: avoid returning hundreds of nodes in a single tool response.
 
 **Input schema (summary):**
 
-- `refresh` (boolean, optional) — refresh cache from Boce before read
+- `force_refresh` (boolean, optional) — refresh cache from Boce before read
 - `detail` (string, optional) — `"summary"` \| `"list"`; default **`list`**
 - `area` (string, optional) — `"mainland"` \| `"oversea"`
+- `region` (string, optional) — explicit region filter (applied before ranking)
+- `isp` (string, optional) — explicit ISP filter (applied before ranking, supports aliases like `unicom/联通/lt`)
 - `query` (string, optional, max 64) — ranked keyword search
 - `search` (string, optional, max 64) — backward-compatible alias for `query`
 - `limit` (integer, optional, 1..1000) — requested page size; **server clamps to 100 per response** (see `overflowProtection`)
@@ -189,14 +181,14 @@ Reads the node cache for choosing `nodeIds` before probing. Designed for **overf
 **Example calls (Cursor chat):**
 
 ```text
-Call MCP tool probe_nodes_list with {"detail":"summary","refresh":true} and print raw output only.
-Call MCP tool probe_nodes_list with {"detail":"list","area":"oversea","query":"gd mobile","limit":30,"offset":0} and print raw output only.
+Call MCP tool probe_nodes_list with {"detail":"summary","force_refresh":true} and print raw output only.
+Call MCP tool probe_nodes_list with {"detail":"list","region":"Guangdong","isp":"Unicom","query":"广东联通","limit":30,"offset":0} and print raw output only.
 Call MCP tool probe_nodes_list with {"nodeId":31} and print raw output only.
 ```
 
 ---
 
-#### 3) `probe_domains_batch_start`
+#### 2) `probe_domains_batch_start`
 
 Starts async HTTP probe batch task.
 
@@ -219,7 +211,7 @@ Call MCP tool probe_domains_batch_start with {"domains":["www.baidu.com","www.qq
 { "taskId": "abc123", "status": "pending", "stage": "QUEUED", "warnings": [] }
 ```
 
-#### 4) `probe_domains_batch_status`
+#### 3) `probe_domains_batch_status`
 
 Returns current progress and next polling hint.
 
@@ -258,7 +250,7 @@ Returns current progress and next polling hint.
 { "taskId": "…", "found": false, "error": "TASK_NOT_FOUND" }
 ```
 
-#### 5) `probe_domains_batch_result`
+#### 4) `probe_domains_batch_result`
 
 Returns final **minimal MCP comparison payload** when completed/failed; while running it returns status + nextStep.
 
