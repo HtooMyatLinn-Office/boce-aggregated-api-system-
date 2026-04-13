@@ -1008,6 +1008,111 @@ Receiver verification rule:
 
 ---
 
+## 10.2 Stream ranking API (ISP-pivoted)
+
+### `GET /api/stream/best?region=beijing`
+
+**Purpose:** Run (or read cached) stream performance sampling and return ranking pivoted by ISP code buckets.
+
+Input query:
+
+| Name | Required | Description |
+|------|----------|-------------|
+| region | Yes | region name/alias, e.g. `beijing`, `guangdong`, `北京` |
+
+Protected by client auth (`X-Client-Id`, `X-Api-Key`) and normal rate limit middleware.
+
+On cache miss:
+
+- endpoint enqueues a stream probe job
+- returns `jobId` + `statusUrl`
+- can return stale previous result when present (`stale: true`)
+
+On cache hit:
+
+- returns `cached: true` and latest ranked payload
+
+**Example (cached hit):**
+
+```json
+{
+  "success": true,
+  "cached": true,
+  "region": "BJ",
+  "nodes": [
+    {
+      "code": "BJ_CM",
+      "nodeName": "北京",
+      "ranking": {
+        "ffm3u8": "529ms",
+        "bfzym3u8": "570ms",
+        "modum3u8": "872ms"
+      }
+    },
+    {
+      "code": "BJ_CT",
+      "nodeName": "北京",
+      "ranking": {
+        "bfzym3u8": "437ms",
+        "modum3u8": "524ms",
+        "ffm3u8": "571ms"
+      }
+    },
+    {
+      "code": "BJ_CU",
+      "nodeName": "北京",
+      "ranking": {
+        "bfzym3u8": "507ms",
+        "ffm3u8": "582ms",
+        "modum3u8": "772ms"
+      }
+    },
+    {
+      "code": "BJ",
+      "ranking": {
+        "bfzym3u8": "437ms",
+        "modum3u8": "524ms",
+        "ffm3u8": "529ms"
+      }
+    }
+  ],
+  "sampledSources": 5,
+  "probedSources": 4,
+  "probedAt": "2026-04-13T10:07:48.239Z"
+}
+```
+
+Notes:
+
+- `nodes[*].ranking` values are strings with `ms` unit.
+- Ranking order inside each object is latency ascending (fastest first).
+- `sampledSources` <= `STREAM_MAX_SOURCES`.
+
+### `GET /api/stream/jobs/:jobId`
+
+Returns stream job status and final result payload when completed.
+
+**Example:**
+
+```json
+{
+  "success": true,
+  "jobId": "123",
+  "state": "completed",
+  "attemptsMade": 1,
+  "failedReason": null,
+  "result": {
+    "region": "BJ",
+    "nodes": [],
+    "sampledSources": 5,
+    "probedSources": 4,
+    "probedAt": "2026-04-13T10:07:48.239Z"
+  }
+}
+```
+
+---
+
 ## 11. Admin APIs (key management)
 
 These endpoints are for platform operators.

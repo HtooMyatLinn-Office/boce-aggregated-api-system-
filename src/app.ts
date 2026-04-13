@@ -10,6 +10,7 @@ import { requireClientAuth } from './middleware/clientAuth';
 import { analyticsRouter } from './routes/analytics';
 import { adminRouter } from './routes/admin';
 import { requireAdminToken } from './middleware/adminAuth';
+import { streamRouter } from './routes/stream';
 
 const app = express();
 
@@ -21,6 +22,7 @@ mountDevRoutes(app);
 app.use('/api/detect', rateLimit, requireClientAuth, detectRouter);
 app.use('/api/batch-detect', rateLimit, requireClientAuth, batchDetectRouter);
 app.use('/api/analytics', rateLimit, requireClientAuth, analyticsRouter);
+app.use('/api/stream', rateLimit, requireClientAuth, streamRouter);
 app.use('/api/admin', requireAdminToken, adminRouter);
 
 // Placeholder for future unified detect API

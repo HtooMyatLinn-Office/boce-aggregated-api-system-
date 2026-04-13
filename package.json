@@ -15,7 +15,8 @@
     "mcp:client": "node scripts/mcp-client.cjs",
     "lint": "eslint src --ext .ts",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "test:stream-probe": "ts-node-dev --transpile-only --no-notify --exit-child scripts/test-stream-probe.ts"
   },
   "engines": {
     "node": ">=18"

@@ -4,6 +4,7 @@ import { startNodeCacheAutoRefresh } from './services/boce';
 import { startDetectWorker } from './services/queue/detectQueue';
 import { migrate } from './services/db/migrate';
 import { startBatchDomainWorker } from './services/queue/batchQueue';
+import { startStreamProbeWorker } from './services/queue/streamProbe/worker';
 import { bootstrapClient } from './services/db/clientAuthRepo';
 import { startBatchDispatcher } from './services/queue/batchDispatcher';
 
@@ -35,6 +36,7 @@ migrate()
 startNodeCacheAutoRefresh();
 startDetectWorker();
 startBatchDomainWorker();
+startStreamProbeWorker();
 startBatchDispatcher();
 
 export default server;

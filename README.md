@@ -121,11 +121,79 @@ When enabled, call business APIs with headers:
 
 - **BOCE_NODE_REFRESH_HOURS**: default `6` (refresh once every N hours after program starts)
 
+### Stream ranking (video source + ISP pivot)
+
+- **STREAM_PLAYBACK_API_URL**: playback API endpoint returning `raw_play_url` + `api_from_code`
+- **STREAM_PLAYBACK_API_METHOD**: `GET` or `POST` (default `GET`)
+- **STREAM_M3U8_FETCH_TIMEOUT_MS**: m3u8 fetch timeout (default `15000`)
+- **STREAM_MAX_SOURCES**: max sampled sources per run (default `5`)
+- **STREAM_PROBE_DELAY_MIN_MS** / **STREAM_PROBE_DELAY_MAX_MS**: per-source probe pacing delay (default `1000`–`2000`)
+- **STREAM_CACHE_TTL_MIN_SEC** / **STREAM_CACHE_TTL_MAX_SEC**: stream cache TTL range (default `600`–`1800`)
+- **STREAM_MAX_NODES**: max Boce nodes used for stream probing (cap `3`)
+
 ## API Documentation
 
 **OpenAPI spec (canonical):** [docs/openapi.yaml](docs/openapi.yaml)
 
 **Complete API doc (all endpoints, full request/response, in test order):** [docs/API.md](docs/API.md)
+
+### Stream best API (pivoted by ISP)
+
+Endpoint:
+
+- `GET /api/stream/best?region=beijing`
+
+Behavior:
+
+- Returns cached stream ranking when available (`cached: true`)
+- On cache miss, enqueues a stream probe job and returns stale/placeholder payload with `jobId`
+- Poll job by `GET /api/stream/jobs/:jobId`
+
+Response shape:
+
+```json
+{
+  "success": true,
+  "cached": true,
+  "region": "BJ",
+  "nodes": [
+    {
+      "code": "BJ_CM",
+      "nodeName": "北京",
+      "ranking": {
+        "ffm3u8": "529ms",
+        "bfzym3u8": "570ms"
+      }
+    },
+    {
+      "code": "BJ_CT",
+      "nodeName": "北京",
+      "ranking": {
+        "bfzym3u8": "437ms",
+        "ffm3u8": "571ms"
+      }
+    },
+    {
+      "code": "BJ_CU",
+      "nodeName": "北京",
+      "ranking": {
+        "bfzym3u8": "507ms",
+        "ffm3u8": "582ms"
+      }
+    },
+    {
+      "code": "BJ",
+      "ranking": {
+        "bfzym3u8": "437ms",
+        "ffm3u8": "529ms"
+      }
+    }
+  ],
+  "sampledSources": 5,
+  "probedSources": 4,
+  "probedAt": "2026-04-13T10:07:48.239Z"
+}
+```
 
 ## MCP Support (AI Agent Integration)
 
