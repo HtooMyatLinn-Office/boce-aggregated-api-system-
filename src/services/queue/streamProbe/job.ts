@@ -61,9 +61,30 @@ function randomProbeDelayMs(): number {
   return min + Math.floor(Math.random() * (max - min + 1));
 }
 
+function randomBatchDelayMs(): number {
+  const min = Math.max(0, config.stream.sourceBatchDelayMinMs);
+  const max = Math.max(min, config.stream.sourceBatchDelayMaxMs);
+  return min + Math.floor(Math.random() * (max - min + 1));
+}
+
 async function sleep(ms: number): Promise<void> {
   if (ms <= 0) return;
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runInBatches<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  const size = Math.max(1, concurrency);
+  for (let i = 0; i < items.length; i += size) {
+    const batch = items.slice(i, i + size);
+    await Promise.all(batch.map((item) => worker(item)));
+    if (i + size < items.length) {
+      await sleep(randomBatchDelayMs());
+    }
+  }
 }
 
 /**
@@ -95,11 +116,17 @@ export async function runStreamProbePipeline(region: string): Promise<StreamBest
 
   const sourceProbeGroups: SourceProbeGroup[] = [];
   let probedSources = 0;
+  let skippedSources = 0;
+  let failedSources = 0;
+  const sourceConcurrency = Math.max(1, config.stream.sourceConcurrency);
 
-  for (const source of sources) {
+  const handleSource = async (source: { m3u8Url: string; sourceCode: string }) => {
     try {
       const { tsUrl } = await fetchAndExtractFirstTs(source.m3u8Url, timeoutMs);
-      if (!tsUrl || tsUrl.toLowerCase().includes('.m3u8')) continue;
+      if (!tsUrl || tsUrl.toLowerCase().includes('.m3u8')) {
+        skippedSources += 1;
+        return;
+      }
 
       // Reuse existing pipeline per source; keep pacing to avoid overload.
       const detection = await detectOnce({ url: tsUrl, nodeIds });
@@ -111,14 +138,31 @@ export async function runStreamProbePipeline(region: string): Promise<StreamBest
       await sleep(randomProbeDelayMs());
     } catch (e) {
       if (e instanceof M3u8ParseError) {
-        continue;
+        skippedSources += 1;
+        return;
       }
       // Skip source-level failures; keep the worker resilient.
-      continue;
+      failedSources += 1;
+      return;
     }
-  }
+  };
 
-  const ranked = pivotRankingByIsp(trimmed, sourceProbeGroups);
+  await runInBatches(sources, sourceConcurrency, handleSource);
+
+  console.info('streamProbe source processing summary', {
+    region: trimmed,
+    totalSourcesFetched: sampledSources,
+    totalSourcesProbed: probedSources,
+    skippedSources,
+    failedSources,
+    sourceConcurrency,
+  });
+
+  const ranked = pivotRankingByIsp(
+    trimmed,
+    sourceProbeGroups,
+    sources.map((s) => s.sourceCode)
+  );
 
   const payload: StreamBestPayload = {
     region: ranked.region,

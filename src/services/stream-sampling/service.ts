@@ -24,7 +24,6 @@ export interface StreamPlaybackSource {
 
 function collectSourcesFromJson(data: unknown): StreamPlaybackSource[] {
   const out: StreamPlaybackSource[] = [];
-  const maxSources = Math.max(1, config.stream.maxSources);
 
   const visit = (obj: unknown) => {
     if (!obj || typeof obj !== 'object') return;
@@ -32,7 +31,6 @@ function collectSourcesFromJson(data: unknown): StreamPlaybackSource[] {
 
     if (Array.isArray(o.sources) && !Array.isArray(o.videos)) {
       for (const s of o.sources) {
-        if (out.length >= maxSources) break;
         if (s && typeof s === 'object' && isNonEmptyString((s as PlaybackSource).raw_play_url)) {
           const src = s as PlaybackSource;
           out.push({
@@ -45,10 +43,8 @@ function collectSourcesFromJson(data: unknown): StreamPlaybackSource[] {
 
     if (Array.isArray(o.videos)) {
       for (const v of o.videos as PlaybackVideo[]) {
-        if (out.length >= maxSources) break;
         if (v && Array.isArray(v.sources)) {
           for (const s of v.sources) {
-            if (out.length >= maxSources) break;
             if (s && isNonEmptyString(s.raw_play_url)) {
               out.push({
                 m3u8Url: String(s.raw_play_url).trim(),
@@ -73,7 +69,7 @@ function buildPlaybackUrl(template: string, region: string): string {
   return template.replace(/\{region\}/gi, encodeURIComponent(region.trim()));
 }
 
-/** Calls playback API and returns deduplicated m3u8 URLs up to `STREAM_MAX_SOURCES` (default 5). */
+/** Calls playback API and returns all valid sources deduplicated by source code. */
 export async function sampleM3u8UrlsForRegion(region: string): Promise<StreamSamplingResult> {
   const template = config.stream.playbackApiUrl?.trim();
   if (!template) {
@@ -110,13 +106,11 @@ export async function sampleM3u8UrlsForRegion(region: string): Promise<StreamSam
   const raw = collectSourcesFromJson(data);
   const seen = new Set<string>();
   const deduped: StreamPlaybackSource[] = [];
-  const maxSources = Math.max(1, config.stream.maxSources);
   for (const s of raw) {
-    const key = s.m3u8Url.toLowerCase();
+    const key = s.sourceCode.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(s);
-    if (deduped.length >= maxSources) break;
   }
 
   return { sources: deduped };

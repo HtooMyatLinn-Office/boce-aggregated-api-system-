@@ -100,10 +100,15 @@ export function rankBySource(
  * BJ_CM/BJ_CT/BJ_CU -> { sourceCode: latency } (sorted by latency asc),
  * plus a region-level aggregate code (BJ) with best latency per source.
  */
-export function pivotRankingByIsp(regionName: string, groups: SourceProbeGroup[]): IspPivotResult {
+export function pivotRankingByIsp(
+  regionName: string,
+  groups: SourceProbeGroup[],
+  allSourceCodes: string[]
+): IspPivotResult {
   const regionCode = toRegionCode(regionName);
   const ispBuckets = new Map<string, Array<{ source: string; latency: number; nodeName?: string }>>();
   const regionRows: Array<{ source: string; latency: number }> = [];
+  const sourceOrder = Array.from(new Set(allSourceCodes));
 
   for (const g of groups) {
     for (const p of g.probes) {
@@ -131,7 +136,11 @@ export function pivotRankingByIsp(regionName: string, groups: SourceProbeGroup[]
       }
     }
     const sorted = Array.from(bestBySource.entries()).sort((a, b) => a[1].latency - b[1].latency);
-    const ranking = Object.fromEntries(sorted.map(([source, v]) => [source, `${v.latency}ms`]));
+    const rankedMap = new Map<string, string>(sorted.map(([source, v]) => [source, `${v.latency}ms`]));
+    for (const source of sourceOrder) {
+      if (!rankedMap.has(source)) rankedMap.set(source, 'N/A');
+    }
+    const ranking = Object.fromEntries(rankedMap.entries());
     const nodeName = sorted[0]?.[1]?.nodeName;
     nodes.push({ code, nodeName, ranking });
   }
@@ -142,12 +151,15 @@ export function pivotRankingByIsp(regionName: string, groups: SourceProbeGroup[]
     const prev = regionBestBySource.get(r.source);
     if (prev === undefined || r.latency < prev) regionBestBySource.set(r.source, r.latency);
   }
-  const regionRanking = Object.fromEntries(
+  const rankedRegionMap = new Map<string, string>(
     Array.from(regionBestBySource.entries())
       .sort((a, b) => a[1] - b[1])
       .map(([source, latency]) => [source, `${latency}ms`])
   );
-  nodes.push({ code: regionCode, ranking: regionRanking });
+  for (const source of sourceOrder) {
+    if (!rankedRegionMap.has(source)) rankedRegionMap.set(source, 'N/A');
+  }
+  nodes.push({ code: regionCode, ranking: Object.fromEntries(rankedRegionMap.entries()) });
 
   return { region: regionCode, nodes };
 }

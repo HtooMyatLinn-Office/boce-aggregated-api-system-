@@ -86,7 +86,9 @@ export const config = {
     /** Optional HTTP method for playback API (GET or POST) */
     playbackApiMethod: (process.env.STREAM_PLAYBACK_API_METHOD ?? 'GET').toUpperCase() as 'GET' | 'POST',
     m3u8FetchTimeoutMs: parseInt(process.env.STREAM_M3U8_FETCH_TIMEOUT_MS ?? '15000', 10),
-    maxSources: Math.max(1, Math.min(20, parseInt(process.env.STREAM_MAX_SOURCES ?? '5', 10))),
+    sourceConcurrency: Math.max(1, Math.min(3, parseInt(process.env.STREAM_SOURCE_CONCURRENCY ?? '2', 10))),
+    sourceBatchDelayMinMs: parseInt(process.env.STREAM_SOURCE_BATCH_DELAY_MIN_MS ?? '300', 10),
+    sourceBatchDelayMaxMs: parseInt(process.env.STREAM_SOURCE_BATCH_DELAY_MAX_MS ?? '500', 10),
     probeDelayMinMs: parseInt(process.env.STREAM_PROBE_DELAY_MIN_MS ?? '1000', 10),
     probeDelayMaxMs: parseInt(process.env.STREAM_PROBE_DELAY_MAX_MS ?? '2000', 10),
     cacheTtlMinSec: parseInt(process.env.STREAM_CACHE_TTL_MIN_SEC ?? '600', 10),
