@@ -68,3 +68,13 @@ export async function selectStreamProbeNodeIds(region: string, maxNodes: number)
     .map((n) => n.id)
     .join(',');
 }
+
+/** Fallback nodeIds when region-specific matching yields no usable candidates. */
+export function getFallbackStreamProbeNodeIds(maxNodes: number): string {
+  const raw = process.env.BOCE_DEFAULT_NODE_IDS?.trim() || '31,32,33';
+  const ids = raw
+    .split(',')
+    .map((x) => x.trim())
+    .filter((x) => /^\d+$/.test(x));
+  return ids.slice(0, Math.max(1, maxNodes)).join(',');
+}

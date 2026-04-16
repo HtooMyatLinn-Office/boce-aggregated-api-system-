@@ -9,7 +9,7 @@ import { detectOnce } from '../../detection/detect';
 import { fetchAndExtractFirstTs, M3u8ParseError } from '../../m3u8/parser';
 import { pivotRankingByIsp, SourceProbeGroup, IspPivotNode } from '../../stream-ranking/service';
 import { sampleM3u8UrlsForRegion } from '../../stream-sampling/service';
-import { selectStreamProbeNodeIds } from '../../stream-sampling/nodeIds';
+import { getFallbackStreamProbeNodeIds, selectStreamProbeNodeIds } from '../../stream-sampling/nodeIds';
 import { toRegionCode } from '../../stream-ranking/codeMapper';
 
 export const STREAM_PROBE_QUEUE_NAME = 'stream-probe';
@@ -87,6 +87,52 @@ async function runInBatches<T>(
   }
 }
 
+interface ProbePassStats {
+  groups: SourceProbeGroup[];
+  probedSources: number;
+  skippedSources: number;
+  failedSources: number;
+}
+
+async function runProbePass(
+  sources: Array<{ m3u8Url: string; sourceCode: string }>,
+  nodeIds: string,
+  timeoutMs: number,
+  sourceConcurrency: number
+): Promise<ProbePassStats> {
+  const groups: SourceProbeGroup[] = [];
+  let probedSources = 0;
+  let skippedSources = 0;
+  let failedSources = 0;
+
+  const handleSource = async (source: { m3u8Url: string; sourceCode: string }) => {
+    try {
+      const { tsUrl } = await fetchAndExtractFirstTs(source.m3u8Url, timeoutMs);
+      if (!tsUrl || tsUrl.toLowerCase().includes('.m3u8')) {
+        skippedSources += 1;
+        return;
+      }
+
+      const detection = await detectOnce({ url: tsUrl, nodeIds });
+      groups.push({
+        sourceCode: source.sourceCode,
+        probes: detection.probes,
+      });
+      probedSources += 1;
+      await sleep(randomProbeDelayMs());
+    } catch (e) {
+      if (e instanceof M3u8ParseError) {
+        skippedSources += 1;
+        return;
+      }
+      failedSources += 1;
+    }
+  };
+
+  await runInBatches(sources, sourceConcurrency, handleSource);
+  return { groups, probedSources, skippedSources, failedSources };
+}
+
 /**
  * Full job run: cache short-circuit → playback sample → m3u8 → ts → detectOnce → rankBySource → Redis.
  * Throws on Boce failures so BullMQ can retry; catches sampling/m3u8 errors into an empty ranking.
@@ -100,9 +146,10 @@ export async function runStreamProbePipeline(region: string): Promise<StreamBest
   const timeoutMs = config.stream.m3u8FetchTimeoutMs;
   const sampledSources = sources.length;
 
-  const nodeIds = await selectStreamProbeNodeIds(trimmed, config.stream.maxNodes);
+  const regionNodeIds = await selectStreamProbeNodeIds(trimmed, config.stream.maxNodes);
+  const fallbackNodeIds = getFallbackStreamProbeNodeIds(config.stream.maxNodes);
   const probedAt = new Date().toISOString();
-  if (!nodeIds || sources.length === 0) {
+  if (sources.length === 0) {
     const empty: StreamBestPayload = {
       region: toRegionCode(trimmed),
       nodes: [],
@@ -114,53 +161,27 @@ export async function runStreamProbePipeline(region: string): Promise<StreamBest
     return empty;
   }
 
-  const sourceProbeGroups: SourceProbeGroup[] = [];
-  let probedSources = 0;
-  let skippedSources = 0;
-  let failedSources = 0;
   const sourceConcurrency = Math.max(1, config.stream.sourceConcurrency);
-
-  const handleSource = async (source: { m3u8Url: string; sourceCode: string }) => {
-    try {
-      const { tsUrl } = await fetchAndExtractFirstTs(source.m3u8Url, timeoutMs);
-      if (!tsUrl || tsUrl.toLowerCase().includes('.m3u8')) {
-        skippedSources += 1;
-        return;
-      }
-
-      // Reuse existing pipeline per source; keep pacing to avoid overload.
-      const detection = await detectOnce({ url: tsUrl, nodeIds });
-      sourceProbeGroups.push({
-        sourceCode: source.sourceCode,
-        probes: detection.probes,
-      });
-      probedSources += 1;
-      await sleep(randomProbeDelayMs());
-    } catch (e) {
-      if (e instanceof M3u8ParseError) {
-        skippedSources += 1;
-        return;
-      }
-      // Skip source-level failures; keep the worker resilient.
-      failedSources += 1;
-      return;
-    }
-  };
-
-  await runInBatches(sources, sourceConcurrency, handleSource);
+  let nodeStrategy: 'region' | 'fallback' = 'region';
+  let stats = await runProbePass(sources, regionNodeIds, timeoutMs, sourceConcurrency);
+  if (stats.probedSources === 0 && fallbackNodeIds && fallbackNodeIds !== regionNodeIds) {
+    nodeStrategy = 'fallback';
+    stats = await runProbePass(sources, fallbackNodeIds, timeoutMs, sourceConcurrency);
+  }
 
   console.info('streamProbe source processing summary', {
     region: trimmed,
     totalSourcesFetched: sampledSources,
-    totalSourcesProbed: probedSources,
-    skippedSources,
-    failedSources,
+    totalSourcesProbed: stats.probedSources,
+    skippedSources: stats.skippedSources,
+    failedSources: stats.failedSources,
     sourceConcurrency,
+    nodeStrategy,
   });
 
   const ranked = pivotRankingByIsp(
     trimmed,
-    sourceProbeGroups,
+    stats.groups,
     sources.map((s) => s.sourceCode)
   );
 
@@ -168,7 +189,7 @@ export async function runStreamProbePipeline(region: string): Promise<StreamBest
     region: ranked.region,
     nodes: ranked.nodes,
     sampledSources,
-    probedSources,
+    probedSources: stats.probedSources,
     probedAt,
   };
   await persistStreamResultForRequestRegion(trimmed, payload);

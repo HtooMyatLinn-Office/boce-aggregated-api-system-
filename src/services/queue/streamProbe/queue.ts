@@ -29,3 +29,19 @@ export async function enqueueStreamProbeJob(
   const delayMs = opts?.delayMs ?? randomInterJobDelayMs();
   return streamProbeQueue.add('streamProbe', data, { delay: delayMs });
 }
+
+function normalizeRegion(region: string): string {
+  return region.trim().toLowerCase();
+}
+
+/** Reuse existing in-flight job for the same region to avoid duplicate queue work. */
+export async function getOrEnqueueStreamProbeJob(
+  data: StreamProbeJobData,
+  opts?: { delayMs?: number }
+): Promise<Job<StreamProbeJobData, StreamBestPayload, string>> {
+  const target = normalizeRegion(data.region);
+  const inFlight = await streamProbeQueue.getJobs(['waiting', 'active', 'delayed', 'prioritized'], 0, 200);
+  const existing = inFlight.find((job) => normalizeRegion(job.data.region) === target);
+  if (existing) return existing;
+  return enqueueStreamProbeJob(data, opts);
+}
